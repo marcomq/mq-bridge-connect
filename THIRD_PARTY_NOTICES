@@ -1,0 +1,233 @@
+THIRD-PARTY NOTICES
+===================
+
+mq-bridge-redpanda ships two artifacts that are distributed together:
+
+  libmq_bridge_redpanda      (Rust cdylib)
+  libmq_bridge_redpanda_go   (Go c-shared library)
+
+Both statically link third-party code. This file lists that code and its
+license. mq-bridge-redpanda's own source is licensed MIT OR Apache-2.0; see
+LICENSE-MIT and LICENSE-APACHE. Choosing an arm of that dual license covers
+this project's own code only — everything listed below keeps its own terms.
+
+Scope
+-----
+
+The audit unit is the *built artifact*, not go.mod or Cargo.toml. Go build
+tags and Cargo features change the linked set, so this file is generated from
+`go list -deps` over go-bridge and `cargo metadata` over the plugin crate, at
+the versions pinned in go.sum and Cargo.lock. Regenerate it with:
+
+    python3 scripts/gen-third-party-notices.py
+
+Anything that changes the curated component imports in go-bridge/main.go, the
+Cargo feature set, or a pinned version invalidates this file.
+
+The Go sibling is built with an explicit component allowlist, not the
+`public/bundle/free` aggregate. That is a licensing decision as much as a size
+one: the free bundle reaches packages under `public/components/community`
+(`cohere`, `openai`, `ollama`) whose Redpanda Community License headers sit on
+top of Apache-2.0 implementation files. None of those are linked here.
+
+Redpanda Connect dual-license check
+-----------------------------------
+
+Redpanda Connect is dual-licensed: Apache-2.0 for the majority of connectors,
+and the Redpanda Community License (RCL) for enterprise features, applied by a
+per-file header. Every Connect source file linked into this build carries the
+Apache-2.0 header; none carries the RCL header. Re-verify after changing the
+component allowlist:
+
+    cd go-bridge
+    grep -rl "Redpanda Community" $(go list -deps -f '{{.Dir}}' . | grep connect/v4)
+
+which must print nothing (grep exits 1).
+
+Mozilla Public License 2.0 obligations
+--------------------------------------
+
+Some linked Go modules are MPL-2.0 (marked below). MPL-2.0 is file-level
+copyleft: distributing a binary that includes them requires making the source
+of *those files* available to recipients, under MPL-2.0, and saying where. The
+unmodified upstream sources at the pinned versions satisfy this. If you fork
+or patch an MPL-2.0 module, you must publish the modified files.
+
+Full license texts
+------------------
+
+Apache-2.0 and MIT appear in this repository as LICENSE-APACHE and LICENSE-MIT.
+For BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0 and Unicode-3.0, and for the exact
+copyright holders of every entry, see the LICENSE file inside each dependency's
+own source tree; the Go module cache under target/go-mod-cache and the Cargo
+registry checkout retain them verbatim.
+
+
+================================================================================
+PART A — Go c-shared library (libmq_bridge_redpanda_go)
+================================================================================
+
+63 third-party Go modules are linked.
+
+- 30 × MIT
+- 19 × Apache-2.0
+- 10 × BSD-3-Clause
+- 2 × MPL-2.0
+- 2 × BSD-2-Clause
+
+- `cuelang.org/go` v0.17.1 — Apache-2.0
+- `github.com/Jeffail/gabs/v2` v2.7.0 — MIT — Copyright (c) 2019 Ashley Jeffs
+- `github.com/Jeffail/grok` v1.1.0 — Apache-2.0
+- `github.com/Jeffail/shutdown` v1.1.0 — MIT — Copyright (c) 2024 Ashley Jeffs
+- `github.com/OneOfOne/xxhash` v1.2.8 — Apache-2.0
+- `github.com/beanstalkd/go-beanstalk` v0.2.0 — MIT — Copyright 2012 Keith Rarick
+- `github.com/cenkalti/backoff/v4` v4.3.0 — MIT — Copyright (c) 2014 Cenk Altı
+- `github.com/cespare/xxhash/v2` v2.3.0 — MIT — Copyright (c) 2016 Caleb Spare
+- `github.com/cockroachdb/apd/v3` v3.2.3 — Apache-2.0
+- `github.com/cpuguy83/go-md2man/v2` v2.0.7 — MIT — Copyright (c) 2014 Brian Goff
+- `github.com/dustin/go-humanize` v1.0.1 — MIT — Copyright (c) 2005-2008  Dustin Sallings <dustin@spy.net>
+- `github.com/elastic/elastic-transport-go/v8` v8.9.0 — Apache-2.0
+- `github.com/elastic/go-elasticsearch/v8` v8.19.3 — Apache-2.0
+- `github.com/fatih/color` v1.19.0 — MIT — Copyright (c) 2013 Fatih Arslan
+- `github.com/felixge/httpsnoop` v1.0.4 — MIT — Copyright (c) 2016 Felix Geisendörfer (felix@debuggable.com)
+- `github.com/fsnotify/fsnotify` v1.10.1 — BSD-3-Clause — Copyright © 2012 The Go Authors. All rights reserved.
+- `github.com/go-logr/logr` v1.4.3 — Apache-2.0
+- `github.com/go-logr/stdr` v1.2.2 — Apache-2.0
+- `github.com/gofrs/uuid/v5` v5.4.0 — MIT — Copyright (C) 2013-2018 by Maxim Bublis <b@codemonkey.ru>
+- `github.com/golang-jwt/jwt/v5` v5.3.1 — MIT — Copyright (c) 2012 Dave Grijalva
+- `github.com/gorilla/handlers` v1.5.2 — BSD-3-Clause — Copyright (c) 2023 The Gorilla Authors. All rights reserved.
+- `github.com/gorilla/mux` v1.8.1 — BSD-3-Clause — Copyright (c) 2023 The Gorilla Authors. All rights reserved.
+- `github.com/govalues/decimal` v0.1.36 — MIT — Copyright (c) 2023 govalues
+- `github.com/hashicorp/golang-lru/arc/v2` v2.0.7 — MPL-2.0 — Copyright (c) 2014 HashiCorp, Inc.
+- `github.com/hashicorp/golang-lru/v2` v2.0.7 — MPL-2.0 — Copyright (c) 2014 HashiCorp, Inc.
+- `github.com/influxdata/go-syslog/v3` v3.0.0 — MIT — Copyright (c) 2018, InfluxData Inc.
+- `github.com/itchyny/gojq` v0.12.19 — MIT — Copyright (c) 2019-2026 itchyny
+- `github.com/itchyny/timefmt-go` v0.1.8 — MIT — Copyright (c) 2020-2025 itchyny
+- `github.com/jmespath/go-jmespath` v0.4.0 — Apache-2.0
+- `github.com/klauspost/compress` v1.19.1 — Apache-2.0
+- `github.com/klauspost/pgzip` v1.2.6 — MIT — Copyright (c) 2014 Klaus Post
+- `github.com/matoous/go-nanoid/v2` v2.1.0 — MIT — Copyright (c) 2018 Matous Dzivjak <matousdzivjak@gmail.com>
+- `github.com/mattn/go-colorable` v0.1.14 — MIT — Copyright (c) 2016 Yasuhiro Matsumoto
+- `github.com/mattn/go-isatty` v0.0.20 — MIT — Copyright (c) Yasuhiro MATSUMOTO <mattn.jp@gmail.com>
+- `github.com/nsf/jsondiff` v0.0.0-20260207060731-8e8d90c4c0ac — MIT — Copyright (C) 2019 nsf <no.smile.face@gmail.com>
+- `github.com/pierrec/lz4/v4` v4.1.27 — BSD-3-Clause — Copyright (c) 2015, Pierre Curto
+- `github.com/quipo/dependencysolver` v0.0.0-20170801134659-2b009cb4ddcc — MIT — Copyright (c) 2014 Lorenzo Alberton
+- `github.com/rcrowley/go-metrics` v0.0.0-20250401214520-65e299d6c5c9 — BSD-2-Clause — Copyright 2012 Richard Crowley. All rights reserved.
+- `github.com/redpanda-data/benthos/v4` v4.78.0 — MIT — Copyright (c) 2025 Redpanda Data, Inc.
+- `github.com/redpanda-data/connect/v4` v4.107.2 — Apache-2.0
+- `github.com/rickb777/period` v1.0.30 — BSD-3-Clause — Copyright (c) 2022, Rick Beton
+- `github.com/rickb777/plural/v2` v2.1.0 — BSD-3-Clause — Copyright (c) 2016, Rick Beton
+- `github.com/robfig/cron/v3` v3.0.1 — MIT — Copyright (C) 2012 Rob Figueiredo
+- `github.com/russross/blackfriday/v2` v2.1.0 — BSD-2-Clause
+- `github.com/segmentio/ksuid` v1.0.4 — MIT — Copyright (c) 2017 Segment.io
+- `github.com/sirupsen/logrus` v1.9.4 — MIT — Copyright (c) 2014 Simon Eskildsen
+- `github.com/tilinna/z85` v1.0.0 — MIT — Copyright (C) 2015 Timo Linna
+- `github.com/urfave/cli/v2` v2.27.7 — MIT — Copyright (c) 2022 urfave/cli maintainers
+- `github.com/xeipuuv/gojsonpointer` v0.0.0-20190905194746-02993c407bfb — Apache-2.0
+- `github.com/xeipuuv/gojsonreference` v0.0.0-20180127040603-bd5ef7bd5415 — Apache-2.0
+- `github.com/xeipuuv/gojsonschema` v1.2.0 — Apache-2.0
+- `github.com/xrash/smetrics` v0.0.0-20250705151800-55b8f293f342 — MIT — Copyright (C) 2016 Felipe da Cunha Gonçalves
+- `github.com/youmark/pkcs8` v0.0.0-20240726163527-a2c0da244d78 — MIT — Copyright (c) 2014 youmark
+- `go.opentelemetry.io/auto/sdk` v1.2.1 — Apache-2.0
+- `go.opentelemetry.io/otel` v1.44.0 — Apache-2.0
+- `go.opentelemetry.io/otel/metric` v1.44.0 — Apache-2.0
+- `go.opentelemetry.io/otel/trace` v1.44.0 — Apache-2.0
+- `golang.org/x/crypto` v0.54.0 — BSD-3-Clause — Copyright 2009 The Go Authors.
+- `golang.org/x/sync` v0.22.0 — BSD-3-Clause — Copyright 2009 The Go Authors.
+- `golang.org/x/sys` v0.47.0 — BSD-3-Clause — Copyright 2009 The Go Authors.
+- `golang.org/x/text` v0.40.0 — BSD-3-Clause — Copyright 2009 The Go Authors.
+- `gopkg.in/natefinch/lumberjack.v2` v2.2.1 — MIT — Copyright (c) 2014 Nate Finch
+- `gopkg.in/yaml.v3` v3.0.1 — Apache-2.0
+
+
+================================================================================
+PART B — Rust cdylib (libmq_bridge_redpanda)
+================================================================================
+
+74 Rust crates are linked, using each crate's declared SPDX
+expression. Where an expression offers a choice (`MIT OR Apache-2.0`), this
+distribution takes no position; recipients may select either arm.
+
+`mq-bridge` itself is listed because the plugin links its SDK.
+
+- 45 × MIT OR Apache-2.0
+- 17 × MIT
+- 9 × Apache-2.0 OR MIT
+- 1 × ISC
+- 1 × Unlicense OR MIT
+- 1 × (MIT OR Apache-2.0) AND Unicode-3.0
+
+- `mq-bridge` 0.4.12 — MIT
+- `anyhow` 1.0.104 — MIT OR Apache-2.0
+- `async-channel` 2.5.0 — Apache-2.0 OR MIT
+- `async-trait` 0.1.92 — MIT OR Apache-2.0
+- `autocfg` 1.5.1 — Apache-2.0 OR MIT
+- `base64` 0.23.1 — MIT OR Apache-2.0
+- `bitflags` 2.13.1 — MIT OR Apache-2.0
+- `block-buffer` 0.12.1 — MIT OR Apache-2.0
+- `bytes` 1.12.1 — MIT
+- `cfg-if` 1.0.4 — MIT OR Apache-2.0
+- `cfg_aliases` 0.2.2 — MIT
+- `chacha20` 0.10.2 — MIT OR Apache-2.0
+- `concurrent-queue` 2.5.0 — Apache-2.0 OR MIT
+- `const-oid` 0.10.2 — Apache-2.0 OR MIT
+- `cpufeatures` 0.3.1 — MIT OR Apache-2.0
+- `crossbeam-utils` 0.8.23 — MIT OR Apache-2.0
+- `crypto-common` 0.2.2 — MIT OR Apache-2.0
+- `digest` 0.11.3 — MIT OR Apache-2.0
+- `errno` 0.3.14 — MIT OR Apache-2.0
+- `event-listener-strategy` 0.5.4 — Apache-2.0 OR MIT
+- `event-listener` 5.4.2 — Apache-2.0 OR MIT
+- `fast-uuid-v7` 0.1.9 — MIT
+- `futures-channel` 0.3.34 — MIT OR Apache-2.0
+- `futures-core` 0.3.34 — MIT OR Apache-2.0
+- `futures-executor` 0.3.34 — MIT OR Apache-2.0
+- `futures-io` 0.3.34 — MIT OR Apache-2.0
+- `futures-macro` 0.3.34 — MIT OR Apache-2.0
+- `futures-sink` 0.3.34 — MIT OR Apache-2.0
+- `futures-task` 0.3.34 — MIT OR Apache-2.0
+- `futures-util` 0.3.34 — MIT OR Apache-2.0
+- `futures` 0.3.34 — MIT OR Apache-2.0
+- `getrandom` 0.4.3 — MIT OR Apache-2.0
+- `hybrid-array` 0.4.14 — MIT OR Apache-2.0
+- `itoa` 1.0.18 — MIT OR Apache-2.0
+- `libc` 0.2.189 — MIT OR Apache-2.0
+- `libloading` 0.9.0 — ISC
+- `memchr` 2.8.3 — Unlicense OR MIT
+- `mio` 1.2.3 — MIT
+- `nix` 0.30.1 — MIT
+- `num-traits` 0.2.19 — MIT OR Apache-2.0
+- `once_cell` 1.21.4 — MIT OR Apache-2.0
+- `parking` 2.2.1 — Apache-2.0 OR MIT
+- `pidlock` 0.2.2 — MIT
+- `pin-project-lite` 0.2.17 — Apache-2.0 OR MIT
+- `proc-macro2` 1.0.107 — MIT OR Apache-2.0
+- `quote` 1.0.47 — MIT OR Apache-2.0
+- `rand` 0.10.2 — MIT OR Apache-2.0
+- `rand_core` 0.10.1 — MIT OR Apache-2.0
+- `rmp-serde` 1.3.1 — MIT
+- `rmp` 0.8.15 — MIT
+- `serde` 1.0.229 — MIT OR Apache-2.0
+- `serde_core` 1.0.229 — MIT OR Apache-2.0
+- `serde_derive` 1.0.229 — MIT OR Apache-2.0
+- `serde_json` 1.0.151 — MIT OR Apache-2.0
+- `sha2` 0.11.0 — MIT OR Apache-2.0
+- `signal-hook-registry` 1.4.8 — MIT OR Apache-2.0
+- `slab` 0.4.12 — MIT
+- `socket2` 0.6.5 — MIT OR Apache-2.0
+- `syn` 2.0.119 — MIT OR Apache-2.0
+- `syn` 3.0.5 — MIT OR Apache-2.0
+- `thiserror-impl` 1.0.69 — MIT OR Apache-2.0
+- `thiserror-impl` 2.0.20 — MIT OR Apache-2.0
+- `thiserror` 1.0.69 — MIT OR Apache-2.0
+- `thiserror` 2.0.20 — MIT OR Apache-2.0
+- `tokio-macros` 2.7.2 — MIT
+- `tokio-util` 0.7.19 — MIT
+- `tokio` 1.53.1 — MIT
+- `tracing-attributes` 0.1.31 — MIT
+- `tracing-core` 0.1.36 — MIT
+- `tracing` 0.1.44 — MIT
+- `typenum` 1.20.1 — MIT OR Apache-2.0
+- `unicode-ident` 1.0.24 — (MIT OR Apache-2.0) AND Unicode-3.0
+- `uuid` 1.26.0 — Apache-2.0 OR MIT
+- `zmij` 1.0.23 — MIT

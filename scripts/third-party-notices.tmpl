@@ -1,0 +1,89 @@
+THIRD-PARTY NOTICES
+===================
+
+mq-bridge-redpanda ships two artifacts that are distributed together:
+
+  libmq_bridge_redpanda      (Rust cdylib)
+  libmq_bridge_redpanda_go   (Go c-shared library)
+
+Both statically link third-party code. This file lists that code and its
+license. mq-bridge-redpanda's own source is licensed MIT OR Apache-2.0; see
+LICENSE-MIT and LICENSE-APACHE. Choosing an arm of that dual license covers
+this project's own code only — everything listed below keeps its own terms.
+
+Scope
+-----
+
+The audit unit is the *built artifact*, not go.mod or Cargo.toml. Go build
+tags and Cargo features change the linked set, so this file is generated from
+`go list -deps` over go-bridge and `cargo metadata` over the plugin crate, at
+the versions pinned in go.sum and Cargo.lock. Regenerate it with:
+
+    python3 scripts/gen-third-party-notices.py
+
+Anything that changes the curated component imports in go-bridge/main.go, the
+Cargo feature set, or a pinned version invalidates this file.
+
+The Go sibling is built with an explicit component allowlist, not the
+`public/bundle/free` aggregate. That is a licensing decision as much as a size
+one: the free bundle reaches packages under `public/components/community`
+(`cohere`, `openai`, `ollama`) whose Redpanda Community License headers sit on
+top of Apache-2.0 implementation files. None of those are linked here.
+
+Redpanda Connect dual-license check
+-----------------------------------
+
+Redpanda Connect is dual-licensed: Apache-2.0 for the majority of connectors,
+and the Redpanda Community License (RCL) for enterprise features, applied by a
+per-file header. Every Connect source file linked into this build carries the
+Apache-2.0 header; none carries the RCL header. Re-verify after changing the
+component allowlist:
+
+    cd go-bridge
+    grep -rl "Redpanda Community" $(go list -deps -f '{{{{.Dir}}}}' . | grep connect/v4)
+
+which must print nothing (grep exits 1).
+
+Mozilla Public License 2.0 obligations
+--------------------------------------
+
+Some linked Go modules are MPL-2.0 (marked below). MPL-2.0 is file-level
+copyleft: distributing a binary that includes them requires making the source
+of *those files* available to recipients, under MPL-2.0, and saying where. The
+unmodified upstream sources at the pinned versions satisfy this. If you fork
+or patch an MPL-2.0 module, you must publish the modified files.
+
+Full license texts
+------------------
+
+Apache-2.0 and MIT appear in this repository as LICENSE-APACHE and LICENSE-MIT.
+For BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0 and Unicode-3.0, and for the exact
+copyright holders of every entry, see the LICENSE file inside each dependency's
+own source tree; the Go module cache under target/go-mod-cache and the Cargo
+registry checkout retain them verbatim.
+
+
+================================================================================
+PART A — Go c-shared library (libmq_bridge_redpanda_go)
+================================================================================
+
+{go_count} third-party Go modules are linked.
+
+{go_summary}
+
+{go_table}
+
+
+================================================================================
+PART B — Rust cdylib (libmq_bridge_redpanda)
+================================================================================
+
+{rust_count} Rust crates are linked, using each crate's declared SPDX
+expression. Where an expression offers a choice (`MIT OR Apache-2.0`), this
+distribution takes no position; recipients may select either arm.
+
+`mq-bridge` itself is listed because the plugin links its SDK.
+
+{rust_summary}
+
+{rust_table}

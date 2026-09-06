@@ -1,0 +1,7 @@
+/.serena/
+/target/
+/dist/
+# cgo emits a generated header next to the build output; bridge.h is source.
+/go-bridge/*.h
+!/go-bridge/bridge.h
+.DS_Store
