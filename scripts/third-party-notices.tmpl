@@ -21,8 +21,8 @@ the versions pinned in go.sum and Cargo.lock. Regenerate it with:
 
     python3 scripts/gen-third-party-notices.py
 
-Anything that changes the curated component imports in go-bridge/main.go, the
-Cargo feature set, or a pinned version invalidates this file.
+Anything that changes the component allowlist in go-bridge/components.allow,
+the Cargo feature set, or a pinned version invalidates this file.
 
 The Go sibling is built with an explicit component allowlist, not the
 `public/bundle/free` aggregate. That is a licensing decision as much as a size
@@ -40,9 +40,13 @@ Apache-2.0 header; none carries the RCL header. Re-verify after changing the
 component allowlist:
 
     cd go-bridge
-    grep -rl "Redpanda Community" $(go list -deps -f '{{{{.Dir}}}}' . | grep connect/v4)
+    go list -deps -f '{{{{.Dir}}}}' . | grep connect/v4 | while read -r d; do
+        grep -l "Redpanda Community" "$d"/*.go 2>/dev/null
+    done
 
-which must print nothing (grep exits 1).
+which must print nothing. The scan is deliberately NOT recursive: a package
+directory may contain an `enterprise/` subdirectory that is never imported, and
+`grep -r` would report those files and fail a build that is in fact clean.
 
 Mozilla Public License 2.0 obligations
 --------------------------------------
@@ -53,11 +57,20 @@ of *those files* available to recipients, under MPL-2.0, and saying where. The
 unmodified upstream sources at the pinned versions satisfy this. If you fork
 or patch an MPL-2.0 module, you must publish the modified files.
 
+Eclipse dual licensing
+----------------------
+
+github.com/eclipse/paho.mqtt.golang (the `mqtt` connector) is offered under
+either EPL-2.0 or EDL-1.0. This distribution relies on the EDL-1.0 arm, which is
+a BSD-3-Clause equivalent and carries no copyleft obligation. Its source tree
+ships both texts as edl-v10 and epl-v20.
+
 Full license texts
 ------------------
 
 Apache-2.0 and MIT appear in this repository as LICENSE-APACHE and LICENSE-MIT.
-For BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0 and Unicode-3.0, and for the exact
+For BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, EPL-2.0/EDL-1.0 and Unicode-3.0,
+and for the exact
 copyright holders of every entry, see the LICENSE file inside each dependency's
 own source tree; the Go module cache under target/go-mod-cache and the Cargo
 registry checkout retain them verbatim.

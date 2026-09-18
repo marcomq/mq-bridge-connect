@@ -11,10 +11,8 @@ import (
 	"fmt"
 	"unsafe"
 
+	_ "github.com/marcomq/mq-bridge-redpanda/go-bridge/internal/components"
 	"github.com/redpanda-data/benthos/v4/public/service"
-	_ "github.com/redpanda-data/connect/v4/public/components/beanstalkd"
-	_ "github.com/redpanda-data/connect/v4/public/components/elasticsearch/v8"
-	_ "github.com/redpanda-data/connect/v4/public/components/pure"
 )
 
 const (

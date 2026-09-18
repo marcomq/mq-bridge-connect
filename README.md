@@ -93,43 +93,46 @@ stays self-contained.
 
 ## Curated components
 
-Only an explicit allowlist is imported ([`go-bridge/main.go`](go-bridge/main.go)):
-`beanstalkd`, `elasticsearch/v8`, and `pure`. Enumerating the registered
-components in the built library gives:
+Components are linked from an explicit allowlist,
+[`go-bridge/components.allow`](go-bridge/components.allow) — the 55
+`public/components` packages of Redpanda Connect that reach no file carrying a
+Redpanda Community License header, out of the 79 that exist. The allowlist is
+data: [`scripts/gen-components.py`](scripts/gen-components.py) turns it into
+`go-bridge/internal/components`, which both the bridge and the catalog tool
+import, so they cannot drift apart.
 
-| Registered | Count | Of which are real connectors |
-| :--- | ---: | :--- |
-| Inputs | 8 | **1** — `beanstalkd` |
-| Outputs | 14 | **2** — `beanstalkd`, `elasticsearch_v8` |
-| Processors | 41 | 0 (not exposed; see non-goals) |
+Enumerating the registered components in the built library gives:
 
-Reproduce with `go run ./internal/catalogtool` from
-[`go-bridge/`](go-bridge/internal/catalogtool/main.go), which walks the Benthos
-global environment of the library as built.
+| Registered | Count |
+| :--- | ---: |
+| Inputs | 51 |
+| Outputs | 63 |
+| Processors | 68 |
 
-So the current build exposes **two connectors**. Everything else is Benthos
-pipeline plumbing pulled in by `pure` — `broker`, `switch`, `retry`, `fallback`,
-`resource`, `drop_on` and friends. That plumbing duplicates work `mq-bridge`
-already owns, and [non-goals](#planned-semantics-not-yet-implemented) say not to
-expose it, so a later phase must filter the catalogue rather than surface
-whatever happens to be registered. `pure` itself cannot simply be dropped:
-Benthos requires it as the base component set.
+Reproduce with `go run ./internal/catalogtool` from [`go-bridge/`](go-bridge/),
+which walks the Benthos global environment of the library as built.
 
-For scale, `connect/v4` ships **78** component packages under
-`public/components/`, which is the practical upper bound on what this approach
-could reach. Getting there is a licensing and dependency exercise, not a
-technical one.
+`tigerbeetle` is allowlisted `!darwin`. Its prebuilt
+`libtb_client_aarch64-macos.a` has members that are not 8-byte aligned, which
+the current Apple linker rejects; it links only under the deprecated
+`-ld_classic`. So macOS builds link 54 packages and other platforms 55. The
+non-Darwin path is not yet verified on a Linux host.
 
-The aggregate `public/bundle/free` is deliberately **not** imported. It pulls
-453 module requirements at the pinned snapshot, and some packages reached
-through `public/components/community` (`cohere`, `openai`, `ollama`) carry
-Redpanda Community/enterprise license headers over Apache-2.0 implementation
-files. That contradiction has to be resolved with upstream before anything
-broad is redistributed.
+The taint is transitive and cannot be guessed from a package name: `snowflake`,
+`kafka`, `aws` and `redpanda` are all excluded, while `gcp` is included because
+its RCL code is confined to a `gcp/enterprise` subpackage that
+`components/gcp` never imports. Two upstream files carry most of the blast
+radius — `internal/serviceaccount/oauth2.go` and `internal/license`.
 
-The allowlist keeps the linked set to **63 third-party Go modules**, none of
-which carry an RCL header — see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES),
-which is generated from what the build actually links.
+The aggregate `public/components/all` is RCL-tainted, so the "everything" bundle
+is not usable under Apache-2.0 terms. `public/bundle/free` does not exist in the
+published module; it is generated at build time and cannot be imported.
+
+The allowlist links **353 third-party Go modules**, none carrying an RCL header
+— see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES), which is generated from what
+the build actually links, and the non-recursive verification command it
+documents. RCL-free is not the same as permissive: see
+[Third-party licenses](#third-party-licenses).
 
 ## Performance
 
@@ -149,9 +152,16 @@ the fixed costs of the approach, not throughput.
 
 Three things follow.
 
-**Size dominates.** The Go sibling is 27× the Rust plugin, for two connectors.
-It is nearly all Redpanda Connect and its transitive dependencies, and it grows
-with the allowlist, not with usage.
+> **These figures predate the full allowlist.** They were measured against the
+> earlier three-package build (1 input, 2 outputs). Only two have been re-measured
+> against the 55-package allowlist: the Go sibling is **253 MiB** release, and
+> peak RSS is **113 MiB** — though that reading comes from the smoke test, which
+> does eight load/unload cycles, so it is not a steady-state number. Load time
+> and call latency have not been re-measured.
+
+**Size dominates.** The Go sibling is ~150× the Rust plugin. It is nearly all
+Redpanda Connect and its transitive dependencies, and it grows with the
+allowlist, not with usage.
 
 **Cold start is disk-bound.** ~1.4 s on first load versus ~4.7 ms warm is the
 cost of faulting in a 45 MiB image. It is paid once per machine boot, but it is
@@ -186,9 +196,10 @@ Related: [golang/go#65050](https://github.com/golang/go/issues/65050) reports
 corruption with multiple Go `c-shared` runtimes on macOS. Until that is
 understood, allow only **one** Go-runtime plugin per process.
 
-### Usability: two connectors, no data path
+### No data path
 
-Configuring a `redpanda` endpoint today fails with an explicit Phase 0
+The catalogue is linked and enumerable, but no message has ever crossed the
+boundary: configuring a `redpanda` endpoint today fails with an explicit Phase 0
 diagnostic. The plugin advertises both directions to pin the ABI shape, which
 would otherwise contradict the generic "does not support" error `mq-bridge`
 returns by default.
@@ -246,6 +257,49 @@ third-party code keeps its own terms, so any binary distribution must still ship
 `THIRD_PARTY_NOTICES` with the Apache-2.0 and MIT attributions of everything
 actually linked. Because Go build tags change the linked set, the audit unit is
 the built artifact, not `go.mod`.
+
+### Third-party licenses
+
+The distributed artifact is **not** purely MIT/Apache-2.0. Every linked Redpanda
+Connect component is Apache-2.0 — that is what the allowlist guarantees — but ten
+of the 353 linked Go modules are weak copyleft. None is GPL, LGPL or AGPL, so
+nothing obliges you to open your own source.
+
+Nine are MPL-2.0, which is file-level copyleft: distributing a binary that
+includes them requires making the source of *those files* available to
+recipients, under MPL-2.0, and saying where. The unmodified upstream sources at
+the pinned versions satisfy this.
+
+| Module | Reached through |
+| :--- | :--- |
+| `hashicorp/golang-lru/v2` | `pure` → Benthos base |
+| `hashicorp/golang-lru/arc/v2` | `pure` → Benthos base |
+| `go-sql-driver/mysql` | `sql` |
+| `hashicorp/go-retryablehttp` | `sql` → `databricks-sql-go` |
+| `hashicorp/go-cleanhttp` | `sql` → `databricks-sql-go` |
+| `hashicorp/go-uuid` | `sql` → `trino-go-client` → `gokrb5` |
+| `certifi/gocertifi` | `spicedb` → `authzed/grpcutil` |
+| `r3labs/diff/v3` | `changelog` |
+| `cyphar/filepath-securejoin` | `git` → `go-git` |
+
+The tenth is `github.com/eclipse/paho.mqtt.golang`, behind the `mqtt` connector,
+offered under either EPL-2.0 or EDL-1.0. This distribution relies on the EDL-1.0
+arm, a BSD-3-Clause equivalent carrying no copyleft obligation.
+
+**The MPL-2.0 obligation cannot be trimmed away.** `golang-lru` arrives through
+`public/components/pure`, which Benthos requires as its base component set.
+Dropping `sql`, `mqtt`, `spicedb`, `changelog` and `git` would clear the other
+eight, at the cost of five connector families, and still leave it.
+
+The Rust side is entirely permissive: MIT/Apache-2.0 throughout, plus
+`libloading` (ISC), `memchr` (Unlicense OR MIT) and `unicode-ident`
+(`(MIT OR Apache-2.0) AND Unicode-3.0` — attribution, not copyleft).
+
+Counts come from `THIRD_PARTY_NOTICES`; the paths were traced with
+`go mod why -m <module>` from [`go-bridge/`](go-bridge/).
+[`scripts/gen-third-party-notices.py`](scripts/gen-third-party-notices.py) fails
+the build on an unrecognised license or on a bare EPL-2.0. MPL-2.0 passes
+deliberately, because the notice documents its obligation rather than hiding it.
 
 ### Contribution
 

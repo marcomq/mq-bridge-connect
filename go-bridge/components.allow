@@ -1,0 +1,83 @@
+# RCL-free component packages of github.com/redpanda-data/connect/v4.
+#
+# Derived from a static import-graph closure over connect v4.107.2: 55 of its 79
+# public/components packages reach no file carrying the Redpanda Community
+# License header. The taint is transitive and NOT predictable from a package
+# name -- `snowflake`, `kafka`, `aws` and `redpanda` are all tainted, while
+# `gcp` is clean because RCL there is confined to `gcp/enterprise`, which
+# components/gcp does not import.
+#
+# Two single upstream files carry almost all the blast radius:
+#   internal/serviceaccount/oauth2.go -> blocks a2a all aws cloud community
+#                                        kafka ockam otlp redpanda
+#   internal/license                  -> blocks a2a all aws cloud community
+#                                        gateway google iceberg jira mssqlserver
+#                                        mysql oracledb otlp postgresql
+#                                        salesforce snowflake splunk
+#
+# An entry may carry a Go build constraint after whitespace, which excludes it
+# from platforms where it cannot link. Paths are relative to
+# github.com/redpanda-data/connect/v4/public/components/.
+# Regenerate with `go generate ./...` from go-bridge/ after editing.
+# Verify with scripts/gen-third-party-notices.py, which classifies the files
+# actually linked rather than trusting this list.
+
+amqp09
+amqp1
+arc
+avro
+azure
+beanstalkd
+cassandra
+changelog
+cockroachdb
+confluent
+couchbase
+crypto
+cyborgdb
+cypher
+dgraph
+discord
+doris
+elasticsearch/v8
+elasticsearch/v9
+ffi
+gcp
+git
+hdfs
+influxdb
+io
+jaeger
+javascript
+maxmind
+memcached
+mongodb
+mqtt
+msgpack
+nanomsg
+nats
+nsq
+opensearch
+pinecone
+prometheus
+pulsar
+pure
+pusher
+qdrant
+questdb
+redis
+sentry
+sftp
+spicedb
+sql
+statsd
+text
+# tigerbeetle ships a prebuilt static archive (libtb_client_aarch64-macos.a)
+# whose members are not 8-byte aligned, which the current Apple linker rejects.
+# It links only under the deprecated -ld_classic, so exclude it on Darwin rather
+# than pin the whole build to a linker that is being removed. Untested on Linux.
+tigerbeetle	!darwin
+timeplus
+twitter
+wasm
+zeromq

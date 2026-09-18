@@ -5,3 +5,4 @@
 /go-bridge/*.h
 !/go-bridge/bridge.h
 .DS_Store
+__pycache__/

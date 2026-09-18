@@ -22,6 +22,12 @@ LICENSE_TEXTS = {
 }
 
 
+# Licenses that must stop the build rather than appear in the notices table.
+# MPL-2.0 is absent deliberately: it is file-level copyleft that the notice
+# already documents an obligation for.
+NEEDS_REVIEW = {"EPL-2.0"}
+
+
 def escape_module(path):
     return "".join("!" + c.lower() if c.isupper() else c for c in path)
 
@@ -32,6 +38,13 @@ def classify(text):
         return "Apache-2.0"
     if "Mozilla Public License" in head:
         return "MPL-2.0"
+    # Eclipse projects offer EPL-2.0 or EDL-1.0; take the permissive arm, but
+    # only when the dual grant is actually stated -- bare EPL-2.0 is weak
+    # copyleft and must not be swept in silently.
+    if "Eclipse Public License" in head:
+        if "Eclipse Distribution License" in head:
+            return "EPL-2.0 OR EDL-1.0"
+        return "EPL-2.0"
     if "Permission is hereby granted, free of charge" in head:
         return "MIT"
     if "Redistribution and use in source and binary forms" in head:
@@ -47,7 +60,7 @@ NOTICE = re.compile(r"(?i)^copyright\s+(\(c\)|©|\d{4})")
 
 
 def copyright_of(text, spdx):
-    if spdx == "Apache-2.0":
+    if spdx in ("Apache-2.0", "EPL-2.0 OR EDL-1.0"):
         return ""
     for line in text.splitlines():
         stripped = line.strip().lstrip("#/* ").strip()
@@ -137,6 +150,12 @@ def main():
     unknown = [r for r in go + rust if r[2] == "UNKNOWN"]
     if unknown:
         print("license could not be identified:", unknown, file=sys.stderr)
+        return 1
+    # Copyleft that a permissive redistribution cannot absorb on its own terms.
+    # Reaching one is a decision for a human, not a row in a generated table.
+    copyleft = [r for r in go + rust if r[2] in NEEDS_REVIEW]
+    if copyleft:
+        print("copyleft license needs review before shipping:", copyleft, file=sys.stderr)
         return 1
     body = TEMPLATE.format(
         go_count=len(go), rust_count=len(rust),
