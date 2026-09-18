@@ -1,7 +1,7 @@
 # mq-bridge-redpanda
 
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-![Status](https://img.shields.io/badge/status-prototype%20(phase%200)-orange)
+![Status](https://img.shields.io/badge/status-early%20(loopback%20verified)-orange)
 
 A Redpanda Connect **connector** compatibility plugin for
 [`mq-bridge`](https://github.com/marcomq/mq-bridge).
@@ -11,15 +11,22 @@ endpoints **without** running a Redpanda Connect pipeline. `mq-bridge` stays the
 engine — routing, batching, middleware, retries, DLQ and transformations remain
 its job. Redpanda supplies only the I/O components.
 
-> ## ⚠️ Status: prototype only — do not deploy
+> ## ⚠️ Status: early — do not deploy
 >
-> This repository is at **Phase 0** (release-gate spike). It builds a Rust plugin
-> and a Go sibling library, loads them, and proves the Benthos `ResourceBuilder`
-> API is reachable across the FFI boundary. **It moves no messages yet**: there is
-> no consumer, no publisher, and no connector configuration.
+> **Messages now cross the boundary in both directions.** A `redpanda` input
+> consumes through a Redpanda Connect connector and a `redpanda` output publishes
+> through one; payloads and metadata survive both ways and Bloblang processors
+> run in between.
 >
-> The Phase 0 gate is **green**: the smoke test passes, including 150 consecutive
-> runs of the load/probe/panic-recovery cycle without a single abort.
+> What has actually been exercised is `socket_server` / `socket` over loopback
+> TCP, plus in-process Go tests covering acknowledgement and configuration.
+> **No connector that talks to a real broker has been run**, and the four-check
+> `mq_bridge::plugin::conformance` suite has not (it needs a connector whose input
+> and output take the same configuration, so it needs a broker). Treat every
+> connector as unverified until you have run it yourself.
+>
+> The loader contract still holds: the smoke test passes, including 150
+> consecutive runs of the load/probe/panic-recovery cycle without a single abort.
 
 ## Architecture
 
@@ -28,10 +35,11 @@ mq-bridge
   └─ native plugin ABI 1.0
       └─ Rust cdylib: libmq_bridge_redpanda
           ├─ mq-bridge plugin SDK (runtime, handles, panic boundary)
-          ├─ CanonicalMessage / disposition translation   (not yet implemented)
+          ├─ CanonicalMessage / disposition translation
           └─ private batch C ABI, resolved at runtime
               └─ Go c-shared sibling: libmq_bridge_redpanda_go
-                  ├─ Benthos ResourceBuilder / Resources
+                  ├─ Benthos StreamBuilder, one stream per endpoint
+                  ├─ per-message acknowledgement parking
                   └─ curated Redpanda component imports
 ```
 
@@ -43,7 +51,9 @@ never via the working directory or the system library search path.
 The private Rust↔Go ABI ([`go-bridge/bridge.h`](go-bridge/bridge.h)) is versioned
 independently of mq-bridge's public plugin ABI: a `struct_size` plus
 major/minor pair, C scalar types only, explicit ownership, and one call per
-*batch* — never per message.
+*batch* — never per message. A batch crosses as one length-prefixed blob
+([`src/wire.rs`](src/wire.rs), [`go-bridge/wire.go`](go-bridge/wire.go)): one
+allocation and one free per crossing, and no base64 of binary payloads.
 
 ### Why a separate Go library
 
@@ -79,8 +89,8 @@ scripts\phase0-smoke.ps1        # Windows
 ```
 
 The script builds the Go `c-shared` library and the Rust cdylib into the same
-`target/<profile>/` directory, then runs [`phase0_smoke`](src/bin/phase0_smoke.rs),
-which:
+`target/<profile>/` directory, runs `cargo test`, then runs
+[`phase0_smoke`](src/bin/phase0_smoke.rs), which:
 
 1. opens the Go library, builds and closes an empty Benthos resource manager;
 2. asserts an ordinary Go panic is recovered at the export boundary and
@@ -88,8 +98,55 @@ which:
 3. loads the Rust cdylib through `mq_bridge::plugin::load_endpoint_plugin` and
    checks the advertised endpoint name and capabilities.
 
+The Go side has its own tests, which need the module cache environment the
+script sets up:
+
+```sh
+cd go-bridge && go test ./...
+```
+
 Go build and module caches are redirected under `target/` so the repository
 stays self-contained.
+
+## Configuring an endpoint
+
+mq-bridge owns one end of every stream and Redpanda Connect owns the other: a
+`redpanda` **input** is a Benthos stream whose output is mq-bridge, and a
+`redpanda` **output** is one whose input is mq-bridge. A configuration that also
+declares the end mq-bridge owns is rejected, rather than quietly bypassing the
+route's retries, DLQ and observability.
+
+There are two configuration forms, and the first compiles into the second, so
+they cannot drift apart ([`src/config.rs`](src/config.rs)).
+
+**Form A — one connector.** Name it with `connector`; everything else is that
+component's own configuration.
+
+```json
+{ "custom": { "name": "redpanda", "config": {
+    "connector": "mqtt",
+    "urls": ["tcp://localhost:1883"],
+    "topics": ["orders"]
+} } }
+```
+
+**Form B — a Redpanda Connect configuration**, minus the end mq-bridge owns.
+This is the form to reach for if you already know Redpanda Connect.
+
+```json
+{ "custom": { "name": "redpanda", "config": { "yaml":
+    "input:\n  mqtt:\n    urls: [tcp://localhost:1883]\n    topics: [orders]\npipeline:\n  processors:\n    - mapping: 'meta ingested_at = now()'\n"
+} } }
+```
+
+Form B accepts `input` or `output` (whichever this endpoint owns), `pipeline`
+with `threads` and `processors`, `logger`, the three `*_resources` sections, and
+`max_in_flight`. Any other top-level key is an error naming what is accepted —
+an ignored key would be configuration the user believes is in effect.
+
+`max_in_flight` (default 64) is how many source messages may sit unacknowledged
+inside the plugin at once. It caps batch size and provides the backpressure. See
+[Ordering](#semantics) before raising or lowering it.
 
 ## Curated components
 
@@ -136,8 +193,9 @@ documents. RCL-free is not the same as permissive: see
 
 ## Performance
 
-Measured on macOS arm64, release build. Phase 0 moves no messages, so these are
-the fixed costs of the approach, not throughput.
+Measured on macOS arm64, release build. These are the fixed costs of the
+approach — load time and per-call overhead — not throughput: no connector has
+been benchmarked moving messages.
 
 | | |
 | :--- | ---: |
@@ -196,13 +254,20 @@ Related: [golang/go#65050](https://github.com/golang/go/issues/65050) reports
 corruption with multiple Go `c-shared` runtimes on macOS. Until that is
 understood, allow only **one** Go-runtime plugin per process.
 
-### No data path
+### Only loopback connectors have been run
 
-The catalogue is linked and enumerable, but no message has ever crossed the
-boundary: configuring a `redpanda` endpoint today fails with an explicit Phase 0
-diagnostic. The plugin advertises both directions to pin the ABI shape, which
-would otherwise contradict the generic "does not support" error `mq-bridge`
-returns by default.
+The data path is exercised by [`tests/data_path.rs`](tests/data_path.rs)
+(`socket_server` / `socket` over loopback TCP) and by the Go tests in
+[`go-bridge/stream_test.go`](go-bridge/stream_test.go), which drive
+acknowledgement through the same code the ABI calls. Nothing has been run
+against Kafka, MQTT, S3 or any other real broker, and connector-specific
+behaviour — authentication, partitioning, redelivery timing — is therefore
+unverified.
+
+`mq_bridge::plugin::conformance` is the intended acceptance gate. It shares one
+configuration between input and output, so it needs a connector whose two
+directions take the same fields (`nats`, `redis_list`, `beanstalkd` do); that
+makes it a broker test rather than a local one.
 
 Deployment also requires **two files in the same directory**. The Rust plugin
 resolves its sibling from its own absolute path, so this is robust, but it does
@@ -215,26 +280,38 @@ ordinary panics only; fatal Go runtime errors, native crashes and OOM remain
 process-fatal for `mq-bridge` itself. Only a subprocess deployment of Redpanda
 Connect gives real isolation.
 
-## Planned semantics (not yet implemented)
+## Semantics
 
-These are the contracts the vertical slice will have to honour, recorded here so
-they are not discovered late:
-
-* **At-least-once, with duplicates.** Benthos `AckFunc` acknowledges a whole
-  batch; `mq-bridge` records a disposition per message. Any `Nack` must reject
-  the entire source batch, so successful siblings can be redelivered. Use
-  idempotent destinations.
+* **At-least-once, per message.** Each source message is held inside its own
+  output write until mq-bridge reports a disposition for it: `Ack` releases it,
+  `Nack` returns an error and the source rejects **that message alone**, not the
+  batch it arrived in. This is why the mq-bridge side is a registered output
+  component rather than `StreamBuilder.AddConsumerFunc`, which writes one message
+  at a time and would cap every batch at one message.
+  `TestCommitAppliesEachDispositionToItsOwnMessage` asserts it.
+* **An uncommitted batch is nacked, not dropped.** Closing a stream rejects
+  everything handed to mq-bridge that was never committed, so the source
+  redelivers it.
+* **Ordering is not preserved across in-flight messages.** Up to `max_in_flight`
+  messages are written concurrently and have no order between them. Set
+  `max_in_flight: 1` for a source whose order matters — at the cost of one
+  message per batch.
+* **`Reply` is not supported.** A Benthos source has nowhere to put a reply, so
+  `MessageDisposition::Reply` acknowledges and the reply payload is dropped.
 * **Whole-batch output results.** Redpanda `BatchError` can report partial
-  success; plugin ABI v1 reports a publish batch all-or-nothing. Retrying can
-  duplicate already-written items.
-* **Bytes and string metadata only.** Structured values and Go message contexts
-  are not translated; Redpanda's `any`-typed metadata is coerced to strings.
-* **Secrets must be indirect.** Custom endpoint config is not currently covered
-  by mq-bridge's secret extractor, so use environment or file references —
-  never inline secrets.
+  success; plugin ABI v1 reports a publish batch all-or-nothing. A publish call
+  returns only once Benthos has delivered the whole batch, so success means
+  delivered rather than queued — but retrying can duplicate already-written items.
+* **Bytes and string metadata only.** Redpanda's `any`-typed metadata is
+  coerced to strings; Go message contexts are not translated.
+* **Secrets must be indirect.** Custom endpoint config is not covered by
+  mq-bridge's secret extractor, and form B makes inline secrets tempting. Use
+  environment or file references.
 
-Explicit non-goals: Bloblang, processors, buffers, streams, the HTTP management
-API, per-connector DLLs, and any claim of exactly-once or zero-copy behaviour.
+Bloblang and processors **are** supported, through form B's `pipeline` — an
+earlier revision of this file listed them as non-goals, and that is no longer
+true. Explicit non-goals remain: buffers, the HTTP management API, per-connector
+DLLs, and any claim of exactly-once or zero-copy behaviour.
 
 ## License
 

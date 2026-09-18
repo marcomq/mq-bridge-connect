@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	github.com/redpanda-data/benthos/v4 v4.78.0
 	github.com/redpanda-data/connect/v4 v4.107.2
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -348,7 +349,6 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apimachinery v0.35.2 // indirect
 	k8s.io/client-go v0.35.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect

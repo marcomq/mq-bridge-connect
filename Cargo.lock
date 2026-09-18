@@ -381,6 +381,7 @@ dependencies = [
  "libloading",
  "mq-bridge",
  "serde_json",
+ "tokio",
  "windows-sys",
 ]
 

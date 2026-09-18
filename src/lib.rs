@@ -1,17 +1,28 @@
-//! Phase 0 shell for the mq-bridge Redpanda Connect compatibility plugin.
+//! Redpanda Connect connector compatibility plugin for mq-bridge.
+//!
+//! mq-bridge owns one end of every stream and Benthos owns the other: a
+//! `redpanda` input is a Benthos stream whose output is mq-bridge, and a
+//! `redpanda` output is one whose input is mq-bridge. See [`config`] for the two
+//! configuration forms.
 
+mod config;
+mod consumer;
 mod go_library;
+mod publisher;
 mod sibling;
+mod stream;
+mod wire;
 
-pub use go_library::{GoLibrary, ProbeError};
+use std::sync::Arc;
+
+pub use go_library::{GoError, GoLibrary, ProbeError, StreamKind};
 
 use async_trait::async_trait;
 use mq_bridge::traits::{CustomEndpointFactory, MessageConsumer, MessagePublisher};
 
-/// Endpoint construction intentionally remains disabled during the release-gate spike.
 #[derive(Debug)]
 pub struct RedpandaFactory {
-    _go: GoLibrary,
+    go: Arc<GoLibrary>,
 }
 
 impl Default for RedpandaFactory {
@@ -22,39 +33,39 @@ impl Default for RedpandaFactory {
         let go = unsafe { GoLibrary::open(&path) }
             .and_then(|go| go.probe().map(|()| go).map_err(anyhow::Error::from))
             .unwrap_or_else(|error| panic!("failed to initialize {}: {error:#}", path.display()));
-        Self { _go: go }
+        Self { go: Arc::new(go) }
     }
 }
 
-// The plugin advertises both directions so the ABI shape is fixed early. Without
-// these overrides mq-bridge answers with its generic "does not support" default,
-// which contradicts the advertised capability and tells the user nothing.
 #[async_trait]
 impl CustomEndpointFactory for RedpandaFactory {
     async fn create_consumer(
         &self,
         route_name: &str,
-        _config: &serde_json::Value,
+        config: &serde_json::Value,
     ) -> anyhow::Result<Box<dyn MessageConsumer>> {
-        Err(unimplemented_direction(route_name, "consumer"))
+        consumer::create(Arc::clone(&self.go), config)
+            .await
+            .map_err(|error| route_context(route_name, "consumer", error))
     }
 
     async fn create_publisher(
         &self,
         route_name: &str,
-        _config: &serde_json::Value,
+        config: &serde_json::Value,
     ) -> anyhow::Result<Box<dyn MessagePublisher>> {
-        Err(unimplemented_direction(route_name, "publisher"))
+        publisher::create(Arc::clone(&self.go), config)
+            .await
+            .map_err(|error| route_context(route_name, "publisher", error))
     }
 }
 
-fn unimplemented_direction(route_name: &str, direction: &str) -> anyhow::Error {
-    anyhow::anyhow!(
-        "route {route_name:?}: the redpanda plugin cannot create a {direction} yet. \
-         This build is the Phase 0 release-gate spike: it loads Redpanda Connect and \
-         proves the FFI boundary works, but implements no data path. It advertises both \
-         directions to pin the plugin ABI, not because either is usable."
-    )
+/// Keeps the route name in the message without re-wrapping the error, so the
+/// permanent/retryable classification the constructors made survives.
+fn route_context(route_name: &str, direction: &str, error: anyhow::Error) -> anyhow::Error {
+    error.context(format!(
+        "route {route_name:?}: failed to create the redpanda {direction}"
+    ))
 }
 
 #[cfg(feature = "plugin")]

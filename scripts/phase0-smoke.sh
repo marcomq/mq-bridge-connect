@@ -33,6 +33,11 @@ mkdir -p "$target_dir/$profile"
     cargo build --locked --lib --bin phase0_smoke
 )
 
+(
+    cd "$repo_dir"
+    cargo test --locked --lib --test data_path
+)
+
 run=1
 while [ "$run" -le 3 ]; do
     "$target_dir/$profile/phase0_smoke" \
