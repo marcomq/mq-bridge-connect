@@ -1,5 +1,6 @@
 # mq-bridge-redpanda
 
+[![CI](https://github.com/marcomq/mq-bridge-redpanda/actions/workflows/ci.yml/badge.svg)](https://github.com/marcomq/mq-bridge-redpanda/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ![Status](https://img.shields.io/badge/status-early%20(loopback%20verified)-orange)
 
@@ -13,20 +14,49 @@ its job. Redpanda supplies only the I/O components.
 
 > ## ⚠️ Status: early — do not deploy
 >
-> **Messages now cross the boundary in both directions.** A `redpanda` input
-> consumes through a Redpanda Connect connector and a `redpanda` output publishes
-> through one; payloads and metadata survive both ways and Bloblang processors
-> run in between.
+> **Messages cross the boundary in both directions**, at 1.07M msg/s in and
+> 2.29M out. A `redpanda` input consumes through a Redpanda Connect connector and
+> a `redpanda` output publishes through one; payloads and metadata survive both
+> ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
+> source message it belongs to.
 >
-> What has actually been exercised is `socket_server` / `socket` over loopback
-> TCP, plus in-process Go tests covering acknowledgement and configuration.
-> **No connector that talks to a real broker has been run**, and the four-check
-> `mq_bridge::plugin::conformance` suite has not (it needs a connector whose input
-> and output take the same configuration, so it needs a broker). Treat every
-> connector as unverified until you have run it yourself.
+> **One thing gates the next status.** The four-check
+> `mq_bridge::plugin::conformance` suite is written and wired into CI against a
+> real beanstalkd broker ([`tests/conformance.rs`](tests/conformance.rs)), but it
+> has never been run — no connector that talks to a broker has. Nor has a Linux
+> build. Both happen on the first CI run; until that is green, treat every one of
+> the 51 inputs and 63 outputs as unverified.
 >
-> The loader contract still holds: the smoke test passes, including 150
-> consecutive runs of the load/probe/panic-recovery cycle without a single abort.
+> What *is* verified: 12 Go tests (race-clean) and 24 Rust tests, covering
+> acknowledgement granularity, batch splitting and aggregation, the wire format,
+> configuration, and `socket_server` / `socket` over loopback TCP. The loader
+> contract holds across 150 consecutive load/probe/panic-recovery cycles.
+
+## When this is worth it
+
+mq-bridge owns one end of every stream, so the plugin is only ever half a route.
+That is also the rule for when it earns its place.
+
+**Reach is the point.** 51 inputs, 63 outputs and 68 processors that mq-bridge
+has no connector for, plus mq-bridge's own route model — retry, DLQ,
+deduplication, encryption, transform, switch, observability — over sinks that
+never had it.
+
+**Speed can be, too, where mq-bridge owns the faster end.** Reading a local file,
+mq-bridge moves **694 773 msg/s** against Redpanda Connect's **143 010 msg/s**
+for the same 200 000 lines, and the boundary into a Redpanda sink is free
+(`mq-bridge → file` measured 108 213 msg/s against 108 164 native). So a
+`file → <redpanda sink>` route through mq-bridge beats the same route inside
+Redpanda Connect whenever the sink can absorb more than 143k/s; when the sink is
+the bottleneck it is a wash, never a loss. That is **one connector on one
+workload, measured with two different harnesses** — a reason to measure your own
+pair, not a general claim that either tool is faster.
+
+**Do not use it for a Redpanda source into a Redpanda sink.** You would pay about
+24% on the consumer boundary
+([Throughput](#throughput-against-a-native-pipeline)), a 267 MiB library and a Go
+runtime pinned in the process for its lifetime, and gain nothing at all. Run
+Redpanda Connect.
 
 ## Architecture
 
@@ -39,7 +69,7 @@ mq-bridge
           └─ private batch C ABI, resolved at runtime
               └─ Go c-shared sibling: libmq_bridge_redpanda_go
                   ├─ Benthos StreamBuilder, one stream per endpoint
-                  ├─ per-message acknowledgement parking
+                  ├─ batch parking with per-message dispositions
                   └─ curated Redpanda component imports
 ```
 
@@ -99,14 +129,32 @@ The script builds the Go `c-shared` library and the Rust cdylib into the same
    checks the advertised endpoint name and capabilities.
 
 The Go side has its own tests, which need the module cache environment the
-script sets up:
+script sets up. Run them under the race detector — the sink parks source batches
+across goroutines, so that is the check that matters:
 
 ```sh
-cd go-bridge && go test ./...
+cd go-bridge && go test -race ./...
+```
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of it on every
+push: `gofmt`, `go vet` and `go test -race`; `cargo fmt`, `cargo clippy -D
+warnings` and the smoke script on both Linux and macOS (Linux links the 55th
+component package that macOS excludes); and the conformance suite against a real
+beanstalkd broker.
+
+The conformance suite needs a broker and skips without one. To run it locally:
+
+```sh
+docker run --rm -p 11300:11300 schickling/beanstalkd
+MQ_BRIDGE_REDPANDA_BEANSTALKD=127.0.0.1:11300 cargo test --test conformance -- --nocapture
 ```
 
 Go build and module caches are redirected under `target/` so the repository
 stays self-contained.
+
+[`scripts/benchmark.sh`](scripts/benchmark.sh) measures the boundary against an
+identical pipeline that never leaves Go — see
+[Throughput](#throughput-against-a-native-pipeline).
 
 ## Configuring an endpoint
 
@@ -144,9 +192,10 @@ with `threads` and `processors`, `logger`, the three `*_resources` sections, and
 `max_in_flight`. Any other top-level key is an error naming what is accepted —
 an ignored key would be configuration the user believes is in effect.
 
-`max_in_flight` (default 64) is how many source messages may sit unacknowledged
-inside the plugin at once. It caps batch size and provides the backpressure. See
-[Ordering](#semantics) before raising or lowering it.
+`max_in_flight` (default 64) is how many source **batches** may sit
+unacknowledged inside the plugin at once. It is the backpressure, and it is also
+what lets the source keep working while mq-bridge handles the previous batch. See
+[Ordering](#semantics) before lowering it.
 
 ## Curated components
 
@@ -193,9 +242,8 @@ documents. RCL-free is not the same as permissive: see
 
 ## Performance
 
-Measured on macOS arm64, release build. These are the fixed costs of the
-approach — load time and per-call overhead — not throughput: no connector has
-been benchmarked moving messages.
+Measured on macOS arm64, release build. First the fixed costs of the approach —
+load time and per-call overhead — then throughput against a native pipeline.
 
 | | |
 | :--- | ---: |
@@ -232,6 +280,48 @@ cost. `mq-bridge`'s tokio worker pool is fixed, so that amortises — but code
 that calls into Go from `spawn_blocking` threads would pay it repeatedly. This
 is why the private ABI is defined per batch.
 
+### Throughput against a native pipeline
+
+[`scripts/benchmark.sh`](scripts/benchmark.sh) runs every pipeline twice: once
+entirely inside Go ([`nativebench`](go-bridge/internal/nativebench/main.go)), and
+once with mq-bridge owning an end
+([`examples/throughput.rs`](examples/throughput.rs)). Both link the same Benthos
+engine and the same component set, so what separates the two numbers is the
+boundary and nothing else. 200 000 messages of 256 B, batches of 500,
+`max_in_flight: 64`, best of three:
+
+| scenario | native | bridged | cost |
+| :--- | ---: | ---: | ---: |
+| `generate` → mq-bridge | 1 327 598 msg/s | 1 074 685 msg/s | 1.24× |
+| `file` → mq-bridge | 143 010 msg/s | 117 626 msg/s | 1.22× |
+| mq-bridge → `drop` | 1 327 598 msg/s | 2 290 531 msg/s | 0.58× |
+| mq-bridge → `file` | 108 164 msg/s | 108 213 msg/s | 1.00× |
+
+**The plugin cannot be faster than Redpanda Connect.** It is Redpanda Connect,
+plus a boundary. The rows under 1.00× are not a win: their baseline fabricates
+every message with a Bloblang mapping, which the publisher is instead handed for
+free. What those rows show is that the publisher boundary disappears into the
+noise, not that anything got faster.
+
+**The boundary costs about a quarter** in the consumer direction, and nothing
+measurable in the publisher direction. Most of that quarter is the crossing
+itself: measured in Go alone with `go test -bench`
+([`stream_bench_test.go`](go-bridge/stream_bench_test.go)), without cgo or Rust,
+the sink runs at 918 ns/message against 861 ns for a native `drop` — 6.6%.
+
+**Two mistakes made the first version of this table read 8×.** The sink was a
+single-message `service.Output`. Benthos breaks a batch bound for one of those
+into a separate blocked goroutine per message, and the scheduler contention cost
+**5.2×** — the CPU profile was 60% `runtime.lock2` under `selectgo`, with almost
+no actual work in it. It is now a `service.BatchOutput`, which keeps per-message
+nack granularity through `service.BatchError` (see [Semantics](#semantics)).
+Separately, a partly filled batch waited out [`batchLinger`](go-bridge/stream.go)
+even when every in-flight slot was already parked and the source could not
+possibly send more. That cost a further **14×** for any source that emits one
+message per batch, `file` among them; `collect` now returns immediately in that
+case, and
+`TestASourceOfSingleMessageBatchesDoesNotWaitOutTheLinger` holds the line.
+
 ## Known issues
 
 ### The Go runtime is loaded once and never unloaded
@@ -264,10 +354,12 @@ against Kafka, MQTT, S3 or any other real broker, and connector-specific
 behaviour — authentication, partitioning, redelivery timing — is therefore
 unverified.
 
-`mq_bridge::plugin::conformance` is the intended acceptance gate. It shares one
-configuration between input and output, so it needs a connector whose two
-directions take the same fields (`nats`, `redis_list`, `beanstalkd` do); that
-makes it a broker test rather than a local one.
+`mq_bridge::plugin::conformance` is the acceptance gate, and it now exists as
+[`tests/conformance.rs`](tests/conformance.rs). It shares one configuration
+between input and output, so it needs a connector whose two directions take the
+same fields: `beanstalkd` takes only `address` and genuinely redelivers what a
+consumer rejects, so all four checks apply. It runs in CI against a broker
+container, and skips locally unless `MQ_BRIDGE_REDPANDA_BEANSTALKD` is set.
 
 Deployment also requires **two files in the same directory**. The Rust plugin
 resolves its sibling from its own absolute path, so this is robust, but it does
@@ -282,20 +374,21 @@ Connect gives real isolation.
 
 ## Semantics
 
-* **At-least-once, per message.** Each source message is held inside its own
-  output write until mq-bridge reports a disposition for it: `Ack` releases it,
-  `Nack` returns an error and the source rejects **that message alone**, not the
-  batch it arrived in. This is why the mq-bridge side is a registered output
-  component rather than `StreamBuilder.AddConsumerFunc`, which writes one message
-  at a time and would cap every batch at one message.
-  `TestCommitAppliesEachDispositionToItsOwnMessage` asserts it.
+* **At-least-once, per message.** A source batch is held inside its output write
+  until mq-bridge has reported a disposition for every message in it. If all are
+  `Ack`ed the write returns `nil`; if any is `Nack`ed it returns a
+  `service.BatchError` naming **exactly those messages**, and the source
+  redelivers only them. `TestANackRejectsOneMessageOfASourceBatch` asserts it
+  against a real multi-message source batch.
+  A source that cannot associate the error with its own batch falls back to
+  redelivering all of it — at-least-once is preserved either way.
 * **An uncommitted batch is nacked, not dropped.** Closing a stream rejects
   everything handed to mq-bridge that was never committed, so the source
   redelivers it.
-* **Ordering is not preserved across in-flight messages.** Up to `max_in_flight`
-  messages are written concurrently and have no order between them. Set
-  `max_in_flight: 1` for a source whose order matters — at the cost of one
-  message per batch.
+* **Ordering is not preserved across in-flight batches.** Up to `max_in_flight`
+  source batches are written concurrently and have no order between them. Set
+  `max_in_flight: 1` for a source whose order matters — at the cost of the
+  pipelining that overlaps mq-bridge's work with the source's.
 * **`Reply` is not supported.** A Benthos source has nowhere to put a reply, so
   `MessageDisposition::Reply` acknowledges and the reply payload is dropped.
 * **Whole-batch output results.** Redpanda `BatchError` can report partial

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -22,36 +23,105 @@ const (
 	kindPublisher = C.MQBRP_KIND_PUBLISHER
 )
 
-// The output mq-bridge occupies in a consumer stream. It is a real component
-// rather than StreamBuilder.AddConsumerFunc because that helper writes one
-// message at a time: a parked message would block the whole pipeline and every
-// batch would hold exactly one message.
+// The output mq-bridge occupies in a consumer stream. It is a registered batch
+// component rather than a StreamBuilder helper because Benthos breaks a batch
+// destined for a single-message output into one blocked goroutine per message,
+// which costs roughly 5x in scheduler contention alone.
 const sinkComponent = "mq_bridge"
 
-// How many source messages may sit parked at once. It caps batch size, and it
-// is the backpressure: a source that outruns mq-bridge blocks rather than
-// buffering without limit. Messages in flight together have no order between
-// them, so an ordered source needs `max_in_flight: 1`.
+// How many source batches Benthos may have parked at once. It is the
+// backpressure, and it is also the pipelining: while mq-bridge works on one
+// batch, the source can keep filling the others. Batches in flight together have
+// no order between them, so an ordered source needs `max_in_flight: 1`.
 const defaultMaxInFlight = 64
 
-// Room for the parked messages plus the ones Benthos is about to hand over.
+// An upper bound on the parked-batch channel, so an extreme `max_in_flight`
+// cannot allocate an extreme channel.
 const pendingCapacity = 4096
 
-// How long a partly filled batch waits for its next message before being handed
-// over. Only ever adds latency to a batch that already has something in it.
+// How long a partly filled batch waits for the next source batch before being
+// handed over. Only ever adds latency to a batch that already has something in
+// it.
 const batchLinger = 5 * time.Millisecond
 
 var (
 	errEndOfStream = errors.New("stream ended")
 	errClosing     = errors.New("stream is closing")
+	errRejected    = errors.New("mq-bridge rejected the message")
 )
 
-// A message held inside its Benthos consumer func. The func stays blocked on
-// `ack` until mq-bridge reports a disposition for it, which is what makes an
-// mq-bridge nack a nack of that one source message.
-type parkedMessage struct {
-	message *service.Message
-	ack     chan error
+// A source batch held inside its Benthos output call. The call stays blocked on
+// `ack` until mq-bridge has committed every message in the batch, and the error
+// it finally receives names the individual messages that were rejected.
+type parkedBatch struct {
+	batch service.MessageBatch
+	ack   chan error
+
+	mutex     sync.Mutex
+	remaining int
+	failed    map[int]error
+}
+
+// A contiguous run of one parked batch, as handed to mq-bridge. mq-bridge asks
+// for a message count that rarely matches what the source produced, so one
+// mq-bridge batch may span several parked batches, or only part of one.
+type handedRun struct {
+	parked *parkedBatch
+	start  int
+	count  int
+}
+
+// Applies mq-bridge's dispositions to one run, and releases the source batch
+// once every message in it has been accounted for.
+func (p *parkedBatch) resolve(start int, dispositions []byte) {
+	p.mutex.Lock()
+	for index, disposition := range dispositions {
+		if disposition == C.MQBRP_NACK {
+			if p.failed == nil {
+				p.failed = map[int]error{}
+			}
+			p.failed[start+index] = errRejected
+		}
+	}
+	p.remaining -= len(dispositions)
+	if p.remaining > 0 {
+		p.mutex.Unlock()
+		return
+	}
+	failed := p.failed
+	p.mutex.Unlock()
+
+	if len(failed) == 0 {
+		p.ack <- nil
+		return
+	}
+	// Naming the failed indexes is what keeps a nack per-message: a source that
+	// can associate them redelivers only those, and one that cannot falls back to
+	// redelivering the whole batch.
+	rejection := service.NewBatchError(p.batch, errRejected)
+	for index, err := range failed {
+		rejection.Failed(index, err)
+	}
+	p.ack <- rejection
+}
+
+// Releases a source batch whose messages will never be committed. Safe to call
+// on a batch that has already been released.
+func (p *parkedBatch) abandon(err error) {
+	p.mutex.Lock()
+	if p.remaining <= 0 {
+		p.mutex.Unlock()
+		return
+	}
+	p.remaining = 0
+	p.mutex.Unlock()
+	p.ack <- err
+}
+
+func abandonAll(runs []handedRun, err error) {
+	for _, run := range runs {
+		run.parked.abandon(err)
+	}
 }
 
 type streamHandle struct {
@@ -61,11 +131,22 @@ type streamHandle struct {
 	runDone chan struct{}
 	runErr  error
 
-	pending chan *parkedMessage             // consumer streams only
+	pending chan *parkedBatch               // consumer streams only
 	produce service.MessageBatchHandlerFunc // publisher streams only
 
+	// Source batches parked but not yet released. Once this reaches
+	// `maxInFlight` the source is blocked until mq-bridge commits.
+	maxInFlight int
+	inFlight    atomic.Int64
+
+	// Guards the hand-over point, including the source batch a previous call
+	// consumed only part of.
+	collectMutex sync.Mutex
+	carry        *parkedBatch
+	carryAt      int
+
 	mutex     sync.Mutex
-	batches   map[uint64][]*parkedMessage
+	batches   map[uint64][]handedRun
 	lastBatch uint64
 	closed    bool
 }
@@ -83,21 +164,22 @@ var registerSink = sync.OnceValue(func() error {
 	spec := service.NewConfigSpec().
 		Field(service.NewIntField("stream")).
 		Field(service.NewIntField("max_in_flight").Default(defaultMaxInFlight))
-	return service.RegisterOutput(sinkComponent, spec,
-		func(conf *service.ParsedConfig, _ *service.Resources) (service.Output, int, error) {
+	return service.RegisterBatchOutput(sinkComponent, spec,
+		func(conf *service.ParsedConfig, _ *service.Resources) (service.BatchOutput, service.BatchPolicy, int, error) {
 			id, err := conf.FieldInt("stream")
 			if err != nil {
-				return nil, 0, err
+				return nil, service.BatchPolicy{}, 0, err
 			}
 			maxInFlight, err := conf.FieldInt("max_in_flight")
 			if err != nil {
-				return nil, 0, err
+				return nil, service.BatchPolicy{}, 0, err
 			}
 			handle, err := lookupStream(uint64(id))
 			if err != nil {
-				return nil, 0, err
+				return nil, service.BatchPolicy{}, 0, err
 			}
-			return &bridgeSink{handle: handle}, maxInFlight, nil
+			// An empty policy leaves the batches exactly as the source made them.
+			return &bridgeSink{handle: handle}, service.BatchPolicy{}, maxInFlight, nil
 		})
 })
 
@@ -107,8 +189,8 @@ type bridgeSink struct {
 
 func (s *bridgeSink) Connect(context.Context) error { return nil }
 
-func (s *bridgeSink) Write(ctx context.Context, message *service.Message) error {
-	return s.handle.park(ctx, message)
+func (s *bridgeSink) WriteBatch(ctx context.Context, batch service.MessageBatch) error {
+	return s.handle.park(ctx, batch)
 }
 
 func (s *bridgeSink) Close(context.Context) error { return nil }
@@ -168,9 +250,15 @@ func openStream(kind uint32, source string) (uint64, error) {
 		}
 	}
 
-	handle := &streamHandle{batches: map[uint64][]*parkedMessage{}, runDone: make(chan struct{})}
+	handle := &streamHandle{
+		batches:     map[uint64][]handedRun{},
+		runDone:     make(chan struct{}),
+		maxInFlight: config.maxInFlight,
+	}
 	if kind == kindConsumer {
-		handle.pending = make(chan *parkedMessage, pendingCapacity)
+		// Benthos never has more than `max_in_flight` batches written at once, so
+		// this depth means a source batch never waits to be parked.
+		handle.pending = make(chan *parkedBatch, min(config.maxInFlight, pendingCapacity))
 	}
 	id := registerStream(handle)
 	defer func() {
@@ -224,13 +312,21 @@ func openStream(kind uint32, source string) (uint64, error) {
 	return id, nil
 }
 
-func (h *streamHandle) park(ctx context.Context, message *service.Message) error {
-	parked := &parkedMessage{message: message, ack: make(chan error, 1)}
+func (h *streamHandle) park(ctx context.Context, batch service.MessageBatch) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	parked := &parkedBatch{batch: batch, ack: make(chan error, 1), remaining: len(batch)}
+	h.inFlight.Add(1)
 	select {
 	case h.pending <- parked:
 	case <-ctx.Done():
+		h.inFlight.Add(-1)
 		return ctx.Err()
 	}
+	// The slot stays occupied until this call returns, which is exactly when
+	// Benthos is free to send another batch.
+	defer h.inFlight.Add(-1)
 	select {
 	case err := <-parked.ack:
 		return err
@@ -239,89 +335,120 @@ func (h *streamHandle) park(ctx context.Context, message *service.Message) error
 	}
 }
 
-// Gathers up to `max` parked messages, waiting `timeout` for the first and
-// [batchLinger] for each one after it. `ended` reports that the stream finished
-// and nothing is left to hand over.
-func (h *streamHandle) collect(max int, timeout time.Duration) (collected []*parkedMessage, ended bool) {
-	collected = make([]*parkedMessage, 0, max)
+// Gathers up to `max` messages, waiting `timeout` for the first source batch and
+// [batchLinger] for each one after it. A source batch bigger than `max` is handed
+// over in pieces, and stays parked until its last piece has been committed.
+// `ended` reports that the stream finished and nothing is left to hand over.
+func (h *streamHandle) collect(max int, timeout time.Duration) (runs []handedRun, total int, ended bool) {
+	h.collectMutex.Lock()
+	defer h.collectMutex.Unlock()
+
+	take := func(parked *parkedBatch, from int) {
+		count := len(parked.batch) - from
+		if count > max-total {
+			count = max - total
+		}
+		runs = append(runs, handedRun{parked: parked, start: from, count: count})
+		total += count
+		if from+count < len(parked.batch) {
+			h.carry, h.carryAt = parked, from+count
+		} else {
+			h.carry, h.carryAt = nil, 0
+		}
+	}
+
+	if h.carry != nil {
+		take(h.carry, h.carryAt)
+	}
+
 	wait := timeout
-	for len(collected) < max {
+	for total < max {
+		// Lingering only pays off while the source can still produce. Once every
+		// in-flight slot is parked here, nothing more can arrive until mq-bridge
+		// commits, so waiting out the linger would be dead time. A source that
+		// emits one message per batch would otherwise pay it on every batch.
+		if total > 0 && len(h.pending) == 0 && h.inFlight.Load() >= int64(h.maxInFlight) {
+			return runs, total, false
+		}
 		timer := time.NewTimer(wait)
 		select {
 		case parked := <-h.pending:
 			timer.Stop()
-			collected = append(collected, parked)
+			take(parked, 0)
 			wait = batchLinger
 		case <-timer.C:
-			return collected, false
+			return runs, total, false
 		case <-h.runDone:
 			timer.Stop()
-			// The run is over, but messages parked before it ended still have to
+			// The run is over, but batches parked before it ended still have to
 			// reach mq-bridge, and their acks still have to be honoured.
-			for len(collected) < max {
+			for total < max {
 				select {
 				case parked := <-h.pending:
-					collected = append(collected, parked)
+					take(parked, 0)
 				default:
-					return collected, len(collected) == 0
+					return runs, total, total == 0
 				}
 			}
-			return collected, false
+			return runs, total, false
 		}
 	}
-	return collected, false
+	return runs, total, false
 }
 
 func (h *streamHandle) nextBatch(max int, timeout time.Duration) (uint64, []byte, error) {
 	if h.pending == nil {
 		return 0, nil, errors.New("stream is a publisher and cannot be read from")
 	}
-	collected, ended := h.collect(max, timeout)
+	runs, total, ended := h.collect(max, timeout)
 	if ended {
 		if err := h.runError(); err != nil {
 			return 0, nil, err
 		}
 		return 0, nil, errEndOfStream
 	}
-	if len(collected) == 0 {
+	if total == 0 {
 		return 0, nil, nil
 	}
 
-	blob, err := encodeBatch(collected)
+	blob, err := encodeRuns(runs, total)
 	if err != nil {
-		releaseAll(collected, err)
+		h.dropCarry(err)
+		abandonAll(runs, err)
 		return 0, nil, err
 	}
 
 	h.mutex.Lock()
 	h.lastBatch++
 	id := h.lastBatch
-	h.batches[id] = collected
+	h.batches[id] = runs
 	h.mutex.Unlock()
 	return id, blob, nil
 }
 
 func (h *streamHandle) commit(id uint64, dispositions []byte) error {
 	h.mutex.Lock()
-	parked, present := h.batches[id]
+	runs, present := h.batches[id]
 	delete(h.batches, id)
 	h.mutex.Unlock()
 
 	if !present {
 		return fmt.Errorf("unknown or already committed batch %d", id)
 	}
-	if len(dispositions) != len(parked) {
+	total := 0
+	for _, run := range runs {
+		total += run.count
+	}
+	if len(dispositions) != total {
 		err := fmt.Errorf("batch %d has %d messages but %d dispositions",
-			id, len(parked), len(dispositions))
-		releaseAll(parked, err)
+			id, total, len(dispositions))
+		abandonAll(runs, err)
 		return err
 	}
-	for index, message := range parked {
-		if dispositions[index] == C.MQBRP_NACK {
-			message.ack <- fmt.Errorf("mq-bridge rejected the message")
-		} else {
-			message.ack <- nil
-		}
+	offset := 0
+	for _, run := range runs {
+		run.parked.resolve(run.start, dispositions[offset:offset+run.count])
+		offset += run.count
 	}
 	return nil
 }
@@ -343,6 +470,16 @@ func (h *streamHandle) publish(blob []byte) error {
 	return nil
 }
 
+func (h *streamHandle) dropCarry(err error) {
+	h.collectMutex.Lock()
+	carry := h.carry
+	h.carry, h.carryAt = nil, 0
+	h.collectMutex.Unlock()
+	if carry != nil {
+		carry.abandon(err)
+	}
+}
+
 func (h *streamHandle) close(timeout time.Duration) error {
 	h.mutex.Lock()
 	if h.closed {
@@ -351,18 +488,19 @@ func (h *streamHandle) close(timeout time.Duration) error {
 	}
 	h.closed = true
 	batches := h.batches
-	h.batches = map[uint64][]*parkedMessage{}
+	h.batches = map[uint64][]handedRun{}
 	h.mutex.Unlock()
 
 	// Everything handed to mq-bridge but never committed is nacked, so the source
 	// redelivers it rather than losing it to the shutdown.
-	for _, parked := range batches {
-		releaseAll(parked, errClosing)
+	for _, runs := range batches {
+		abandonAll(runs, errClosing)
 	}
+	h.dropCarry(errClosing)
 	for {
 		select {
 		case parked := <-h.pending:
-			parked.ack <- errClosing
+			parked.abandon(errClosing)
 			continue
 		default:
 		}
@@ -388,12 +526,6 @@ func (h *streamHandle) runError() error {
 		return nil
 	}
 	return h.runErr
-}
-
-func releaseAll(messages []*parkedMessage, err error) {
-	for _, message := range messages {
-		message.ack <- err
-	}
 }
 
 //export mqbrp_go_stream_open

@@ -52,27 +52,39 @@ func appendBytes(buffer []byte, value []byte) []byte {
 	return append(appendU32(buffer, len(value)), value...)
 }
 
-func encodeBatch(messages []*parkedMessage) ([]byte, error) {
-	buffer := appendU32(make([]byte, 0, 256), len(messages))
-	for _, parked := range messages {
-		payload, err := parked.message.AsBytes()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read message payload: %w", err)
+// Encodes the messages of `runs`, which together hold exactly `total` of them,
+// into one blob for the boundary.
+func encodeRuns(runs []handedRun, total int) ([]byte, error) {
+	buffer := appendU32(make([]byte, 0, 256), total)
+	for _, run := range runs {
+		for _, message := range run.parked.batch[run.start : run.start+run.count] {
+			var err error
+			if buffer, err = appendMessage(buffer, message); err != nil {
+				return nil, err
+			}
 		}
-		buffer = appendBytes(buffer, payload)
+	}
+	return buffer, nil
+}
 
-		metadata := make([][2]string, 0, 4)
-		if err := parked.message.MetaWalkMut(func(key string, value any) error {
-			metadata = append(metadata, [2]string{key, metadataString(value)})
-			return nil
-		}); err != nil {
-			return nil, fmt.Errorf("failed to read message metadata: %w", err)
-		}
-		buffer = appendU32(buffer, len(metadata))
-		for _, entry := range metadata {
-			buffer = appendBytes(buffer, []byte(entry[0]))
-			buffer = appendBytes(buffer, []byte(entry[1]))
-		}
+func appendMessage(buffer []byte, message *service.Message) ([]byte, error) {
+	payload, err := message.AsBytes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read message payload: %w", err)
+	}
+	buffer = appendBytes(buffer, payload)
+
+	metadata := make([][2]string, 0, 4)
+	if err := message.MetaWalkMut(func(key string, value any) error {
+		metadata = append(metadata, [2]string{key, metadataString(value)})
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to read message metadata: %w", err)
+	}
+	buffer = appendU32(buffer, len(metadata))
+	for _, entry := range metadata {
+		buffer = appendBytes(buffer, []byte(entry[0]))
+		buffer = appendBytes(buffer, []byte(entry[1]))
 	}
 	return buffer, nil
 }

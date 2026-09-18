@@ -22,7 +22,7 @@ try {
 Push-Location $RepoDir
 try {
     cargo build --locked --lib --bin phase0_smoke
-    cargo test --locked --lib --test data_path
+    cargo test --locked --lib --test data_path --test conformance
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed" }
 } finally {
     Pop-Location

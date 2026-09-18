@@ -6,3 +6,5 @@
 !/go-bridge/bridge.h
 .DS_Store
 __pycache__/
+# `go test -cpuprofile` keeps the compiled test binary.
+/go-bridge/*.test

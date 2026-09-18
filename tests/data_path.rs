@@ -7,45 +7,15 @@
 //! so it runs against a real broker rather than here.
 
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use mq_bridge::errors::ConsumerError;
 use mq_bridge::traits::{CustomEndpointFactory, MessageConsumer, MessageDisposition};
 use mq_bridge::CanonicalMessage;
-use mq_bridge_redpanda::RedpandaFactory;
 use serde_json::json;
 
-fn go_library() -> PathBuf {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let name = if cfg!(target_os = "windows") {
-        "mq_bridge_redpanda_go.dll"
-    } else if cfg!(target_os = "macos") {
-        "libmq_bridge_redpanda_go.dylib"
-    } else {
-        "libmq_bridge_redpanda_go.so"
-    };
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join(profile)
-        .join(name)
-}
-
-/// The test binary lives in `target/<profile>/deps`, so sibling resolution would
-/// look one directory too deep.
-fn factory() -> RedpandaFactory {
-    let library = go_library();
-    assert!(
-        library.exists(),
-        "{} is missing; build it with `sh scripts/phase0-smoke.sh` first",
-        library.display()
-    );
-    std::env::set_var("MQ_BRIDGE_REDPANDA_GO_LIBRARY", &library);
-    RedpandaFactory::default()
-}
+mod common;
+use common::factory;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -189,4 +159,85 @@ fn rejection<T>(result: anyhow::Result<T>, expectation: &str) -> String {
         Ok(_) => panic!("{expectation}"),
         Err(error) => format!("{error:#}"),
     }
+}
+
+/// A source that produces one batch of `count` messages, so a smaller
+/// `receive_batch` has to split it.
+fn generating(count: usize) -> serde_json::Value {
+    json!({ "yaml": format!(
+        "input:\n  generate:\n    count: {count}\n    interval: \"\"\n    batch_size: {count}\n\
+         \x20   mapping: 'root = \"payload\"'\n"
+    )})
+}
+
+/// Covers three things the unit tests cannot: that a source batch larger than
+/// mq-bridge asked for is split across calls, that no call exceeds the requested
+/// size, and that a drained stream reports the end rather than hanging.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_large_source_batch_is_split_and_then_the_stream_ends() {
+    const TOTAL: usize = 100;
+    const CHUNK: usize = 10;
+
+    let factory = factory();
+    let mut consumer = factory
+        .create_consumer("redpanda-split", &generating(TOTAL))
+        .await
+        .expect("failed to create the consumer");
+    consumer.set_exit_on_empty(true);
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut received = 0;
+    let mut ended = false;
+    while Instant::now() < deadline {
+        match consumer.receive_batch(CHUNK).await {
+            Ok(batch) => {
+                let count = batch.messages.len();
+                assert!(
+                    count <= CHUNK,
+                    "receive_batch({CHUNK}) returned {count} messages"
+                );
+                received += count;
+                (batch.commit)(vec![MessageDisposition::Ack; count])
+                    .await
+                    .expect("commit failed");
+            }
+            Err(ConsumerError::EndOfStream) => {
+                ended = true;
+                break;
+            }
+            Err(error) => panic!("receive_batch failed: {error}"),
+        }
+    }
+
+    assert_eq!(received, TOTAL, "drained {received} of {TOTAL} messages");
+    assert!(ended, "the drained stream never reported the end");
+    consumer.close().await.expect("consumer close failed");
+}
+
+/// The commit closure counts the dispositions it is handed, so a caller that
+/// miscounts is told rather than silently acknowledging the wrong messages.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commit_with_the_wrong_number_of_dispositions_is_rejected() {
+    let factory = factory();
+    let mut consumer = factory
+        .create_consumer("redpanda-miscount", &generating(4))
+        .await
+        .expect("failed to create the consumer");
+
+    let batch = consumer
+        .receive_batch(4)
+        .await
+        .expect("receive_batch failed");
+    let count = batch.messages.len();
+    assert!(count > 0, "the source produced nothing to commit");
+
+    let error = (batch.commit)(vec![MessageDisposition::Ack; count + 1])
+        .await
+        .expect_err("a commit with too many dispositions must fail");
+    assert!(
+        format!("{error:#}").contains("dispositions"),
+        "unexpected error: {error:#}"
+    );
+
+    consumer.close().await.expect("consumer close failed");
 }

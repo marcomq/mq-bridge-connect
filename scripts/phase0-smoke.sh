@@ -35,7 +35,7 @@ mkdir -p "$target_dir/$profile"
 
 (
     cd "$repo_dir"
-    cargo test --locked --lib --test data_path
+    cargo test --locked --lib --test data_path --test conformance
 )
 
 run=1

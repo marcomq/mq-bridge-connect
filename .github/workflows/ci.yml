@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  go:
+    name: Go (vet, race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-bridge/go.mod
+          cache-dependency-path: go-bridge/go.sum
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l go-bridge/)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: go vet
+        working-directory: go-bridge
+        run: go vet ./...
+      # The sink parks source batches across goroutines, so the race detector is
+      # the test that matters most here.
+      - name: go test -race
+        working-directory: go-bridge
+        run: go test -race ./...
+
+  build:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mq-bridge-redpanda
+      # `mq-bridge` is a path dependency at `../mq-bridge`.
+      - name: Check out the mq-bridge host
+        uses: actions/checkout@v4
+        with:
+          repository: marcomq/mq-bridge
+          path: mq-bridge
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mq-bridge-redpanda
+      - name: Formatting and lints
+        working-directory: mq-bridge-redpanda
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+      # Builds the Go c-shared sibling and the Rust cdylib, runs every test, then
+      # the loader smoke test three times. On Linux this also links the 55th
+      # component package, which macOS excludes.
+      - name: Build, test and smoke
+        working-directory: mq-bridge-redpanda
+        run: |
+          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)"
+          sh scripts/phase0-smoke.sh
+
+  conformance:
+    name: Conformance (beanstalkd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      beanstalkd:
+        image: schickling/beanstalkd
+        ports:
+          - 11300:11300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mq-bridge-redpanda
+      - name: Check out the mq-bridge host
+        uses: actions/checkout@v4
+        with:
+          repository: marcomq/mq-bridge
+          path: mq-bridge
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mq-bridge-redpanda
+      - name: Wait for beanstalkd
+        run: |
+          for _ in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/11300) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "beanstalkd never accepted a connection" >&2
+          exit 1
+      - name: Build the Go sibling
+        working-directory: mq-bridge-redpanda/go-bridge
+        run: |
+          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)"
+          mkdir -p ../target/debug
+          go build -buildmode=c-shared -o ../target/debug/libmq_bridge_redpanda_go.so .
+      # The acceptance gate: round_trip, metadata_preserved, nack_redelivers and
+      # uncommitted_batch_redelivers, against a broker that really redelivers.
+      - name: Run the conformance suite
+        working-directory: mq-bridge-redpanda
+        env:
+          MQ_BRIDGE_REDPANDA_BEANSTALKD: 127.0.0.1:11300
+        run: cargo test --locked --test conformance -- --nocapture
