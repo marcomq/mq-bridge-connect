@@ -3,8 +3,11 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use mq_bridge_redpanda::RedpandaFactory;
+
+static LIBRARY: OnceLock<()> = OnceLock::new();
 
 pub fn go_library() -> PathBuf {
     let profile = if cfg!(debug_assertions) {
@@ -34,6 +37,7 @@ pub fn factory() -> RedpandaFactory {
         "{} is missing; build it with `sh scripts/phase0-smoke.sh` first",
         library.display()
     );
-    std::env::set_var("MQ_BRIDGE_REDPANDA_GO_LIBRARY", &library);
+    // `set_var` is not thread-safe, and the tests in one binary run in parallel.
+    LIBRARY.get_or_init(|| std::env::set_var("MQ_BRIDGE_REDPANDA_GO_LIBRARY", &library));
     RedpandaFactory::default()
 }

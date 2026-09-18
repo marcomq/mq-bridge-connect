@@ -383,7 +383,7 @@ func (s *singleMessageSource) ReadBatch(context.Context) (service.MessageBatch, 
 }
 
 // Such a source can never fill a batch bigger than `max_in_flight`, so waiting
-// out the linger on every batch is dead time. It once cost 14x.
+// out the linger on every batch is dead time, and worth 14x here.
 func TestASourceOfSingleMessageBatchesDoesNotWaitOutTheLinger(t *testing.T) {
 	const maxInFlight = 4
 	const messages = 400
@@ -722,5 +722,51 @@ func TestAStreamRefusesTheDirectionItDoesNotOwn(t *testing.T) {
 	defer func() { _ = publisher.close(5 * time.Second) }()
 	if _, _, err := publisher.nextBatch(1, time.Second); err == nil {
 		t.Error("a publisher stream must refuse a read")
+	}
+}
+
+// A batch is released exactly once, however it ends.
+//
+// The dangerous order is a batch abandoned while only part of it had been
+// committed, whose output call has already given up: the acknowledgement channel
+// is one deep and still holds the abandon, so a second release would block its
+// caller — `stream_commit`, and with it the mq-bridge thread calling it —
+// forever.
+func TestAParkedBatchIsReleasedOnlyOnce(t *testing.T) {
+	batch := make(service.MessageBatch, 4)
+	for index := range batch {
+		batch[index] = service.NewMessage(fmt.Appendf(nil, "payload-%d", index))
+	}
+	parked := &parkedBatch{batch: batch, ack: make(chan error, 1), remaining: len(batch)}
+
+	// Nobody reads this: the output call it belongs to has already returned.
+	parked.abandon(errClosing)
+
+	released := make(chan struct{})
+	go func() {
+		parked.resolve(0, []byte{1, 0})
+		close(released)
+	}()
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolving an already released batch blocked its caller")
+	}
+
+	// And the reverse order: a fully committed batch must not be released again.
+	other := &parkedBatch{batch: batch, ack: make(chan error, 1), remaining: 1}
+	other.resolve(0, []byte{0})
+	abandoned := make(chan struct{})
+	go func() {
+		other.abandon(errClosing)
+		close(abandoned)
+	}()
+	select {
+	case <-abandoned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("abandoning an already committed batch blocked its caller")
+	}
+	if len(other.ack) != 1 {
+		t.Errorf("expected exactly one release on the channel, got %d", len(other.ack))
 	}
 }

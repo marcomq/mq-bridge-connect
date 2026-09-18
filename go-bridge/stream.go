@@ -60,6 +60,7 @@ type parkedBatch struct {
 	mutex     sync.Mutex
 	remaining int
 	failed    map[int]error
+	released  bool
 }
 
 // A contiguous run of one parked batch, as handed to mq-bridge. mq-bridge asks
@@ -75,6 +76,10 @@ type handedRun struct {
 // once every message in it has been accounted for.
 func (p *parkedBatch) resolve(start int, dispositions []byte) {
 	p.mutex.Lock()
+	if p.released {
+		p.mutex.Unlock()
+		return
+	}
 	for index, disposition := range dispositions {
 		if disposition == C.MQBRP_NACK {
 			if p.failed == nil {
@@ -88,6 +93,7 @@ func (p *parkedBatch) resolve(start int, dispositions []byte) {
 		p.mutex.Unlock()
 		return
 	}
+	p.released = true
 	failed := p.failed
 	p.mutex.Unlock()
 
@@ -105,14 +111,19 @@ func (p *parkedBatch) resolve(start int, dispositions []byte) {
 	p.ack <- rejection
 }
 
-// Releases a source batch whose messages will never be committed. Safe to call
-// on a batch that has already been released.
+// Releases a source batch whose messages will never be committed.
+//
+// Every path that ends a batch goes through `released`, so the blocked output
+// call is woken exactly once. Without that, a batch abandoned while only part of
+// it had been committed could be released twice, and the second send on a
+// one-deep channel nobody is reading any more would block its caller forever.
 func (p *parkedBatch) abandon(err error) {
 	p.mutex.Lock()
-	if p.remaining <= 0 {
+	if p.released {
 		p.mutex.Unlock()
 		return
 	}
+	p.released = true
 	p.remaining = 0
 	p.mutex.Unlock()
 	p.ack <- err

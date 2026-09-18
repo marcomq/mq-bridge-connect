@@ -20,17 +20,24 @@ its job. Redpanda supplies only the I/O components.
 > ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 > source message it belongs to.
 >
-> **One thing gates the next status.** The four-check
-> `mq_bridge::plugin::conformance` suite is written and wired into CI against a
-> real beanstalkd broker ([`tests/conformance.rs`](tests/conformance.rs)), but it
-> has never been run — no connector that talks to a broker has. Nor has a Linux
-> build. Both happen on the first CI run; until that is green, treat every one of
-> the 51 inputs and 63 outputs as unverified.
+> **The acceptance gate now passes against a real broker.**
+> `mq_bridge::plugin::conformance` ([`tests/conformance.rs`](tests/conformance.rs))
+> runs `round_trip`, `nack_redelivers` and `uncommitted_batch_redelivers` against
+> a live beanstalkd, green five times consecutively. That is the first connector
+> that talks to a broker, and it exercises redelivery for real rather than
+> through a scripted source. `metadata_preserved` is skipped because a beanstalkd
+> job is a body and nothing else; boundary metadata is covered by other tests.
 >
-> What *is* verified: 12 Go tests (race-clean) and 24 Rust tests, covering
-> acknowledgement granularity, batch splitting and aggregation, the wire format,
-> configuration, and `socket_server` / `socket` over loopback TCP. The loader
-> contract holds across 150 consecutive load/probe/panic-recovery cycles.
+> **What still gates the next status.** No Linux build has ever succeeded — the
+> first CI run failed to link, and the fix in this tree is unverified until CI
+> runs again. `beanstalkd` is also one connector; treat the other 50 inputs and
+> 62 outputs as unverified.
+>
+> What *is* verified: 13 Go tests (race-clean) and 17 Rust tests, covering
+> acknowledgement granularity, batch splitting and aggregation, release-once
+> semantics, the wire format, configuration, and `socket_server` / `socket` over
+> loopback TCP. The loader contract holds across 150 consecutive
+> load/probe/panic-recovery cycles.
 
 ## When this is worth it
 
@@ -138,14 +145,13 @@ cd go-bridge && go test -race ./...
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of it on every
 push: `gofmt`, `go vet` and `go test -race`; `cargo fmt`, `cargo clippy -D
-warnings` and the smoke script on both Linux and macOS (Linux links the 55th
-component package that macOS excludes); and the conformance suite against a real
-beanstalkd broker.
+warnings` and the smoke script on both Linux and macOS; and the conformance
+suite against a real beanstalkd broker.
 
 The conformance suite needs a broker and skips without one. To run it locally:
 
 ```sh
-docker run --rm -p 11300:11300 schickling/beanstalkd
+docker run --rm -p 11300:11300 schickling/beanstalkd   # or: beanstalkd -l 127.0.0.1 -p 11300
 MQ_BRIDGE_REDPANDA_BEANSTALKD=127.0.0.1:11300 cargo test --test conformance -- --nocapture
 ```
 
@@ -200,9 +206,10 @@ what lets the source keep working while mq-bridge handles the previous batch. Se
 ## Curated components
 
 Components are linked from an explicit allowlist,
-[`go-bridge/components.allow`](go-bridge/components.allow) — the 55
+[`go-bridge/components.allow`](go-bridge/components.allow) — the 54
 `public/components` packages of Redpanda Connect that reach no file carrying a
-Redpanda Community License header, out of the 79 that exist. The allowlist is
+Redpanda Community License header and can be linked into a shared library, out
+of the 79 that exist. The allowlist is
 data: [`scripts/gen-components.py`](scripts/gen-components.py) turns it into
 `go-bridge/internal/components`, which both the bridge and the catalog tool
 import, so they cannot drift apart.
@@ -218,11 +225,12 @@ Enumerating the registered components in the built library gives:
 Reproduce with `go run ./internal/catalogtool` from [`go-bridge/`](go-bridge/),
 which walks the Benthos global environment of the library as built.
 
-`tigerbeetle` is allowlisted `!darwin`. Its prebuilt
-`libtb_client_aarch64-macos.a` has members that are not 8-byte aligned, which
-the current Apple linker rejects; it links only under the deprecated
-`-ld_classic`. So macOS builds link 54 packages and other platforms 55. The
-non-Darwin path is not yet verified on a Linux host.
+`tigerbeetle` is the 55th RCL-free package and is excluded on every platform:
+it ships prebuilt static archives, and neither can go into a `c-shared` object.
+The macOS one has members that are not 8-byte aligned, which only the deprecated
+`-ld_classic` accepts. The Linux one carries `R_X86_64_TPOFF32` initial-exec TLS
+relocations, which a shared object cannot hold — `ld` says "recompile with
+`-fPIC`", and since the archive is prebuilt, we cannot.
 
 The taint is transitive and cannot be guessed from a package name: `snowflake`,
 `kafka`, `aws` and `redpanda` are all excluded, while `gcp` is included because
@@ -230,11 +238,19 @@ its RCL code is confined to a `gcp/enterprise` subpackage that
 `components/gcp` never imports. Two upstream files carry most of the blast
 radius — `internal/serviceaccount/oauth2.go` and `internal/license`.
 
+That the boundary holds is checked rather than asserted:
+[`scripts/check-rcl.py`](scripts/check-rcl.py) asks the Go toolchain for the
+package closure the compiler actually compiles, reads every file in it, and
+fails on an RCL header. It runs in CI, so an upstream release that taints a
+package we link is caught at the next push rather than after shipping. At
+connect v4.110.0 it reads 20,741 linked files and finds none; the same scan of
+the `all` bundle finds 193.
+
 The aggregate `public/components/all` is RCL-tainted, so the "everything" bundle
 is not usable under Apache-2.0 terms. `public/bundle/free` does not exist in the
 published module; it is generated at build time and cannot be imported.
 
-The allowlist links **353 third-party Go modules**, none carrying an RCL header
+The allowlist links **351 third-party Go modules**, none carrying an RCL header
 — see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES), which is generated from what
 the build actually links, and the non-recursive verification command it
 documents. RCL-free is not the same as permissive: see
@@ -260,7 +276,7 @@ Three things follow.
 
 > **These figures predate the full allowlist.** They were measured against the
 > earlier three-package build (1 input, 2 outputs). Only two have been re-measured
-> against the 55-package allowlist: the Go sibling is **253 MiB** release, and
+> against the full allowlist: the Go sibling is **253 MiB** release, and
 > peak RSS is **113 MiB** — though that reading comes from the smoke test, which
 > does eight load/unload cycles, so it is not a steady-state number. Load time
 > and call latency have not been re-measured.
@@ -309,17 +325,17 @@ itself: measured in Go alone with `go test -bench`
 ([`stream_bench_test.go`](go-bridge/stream_bench_test.go)), without cgo or Rust,
 the sink runs at 918 ns/message against 861 ns for a native `drop` — 6.6%.
 
-**Two mistakes made the first version of this table read 8×.** The sink was a
-single-message `service.Output`. Benthos breaks a batch bound for one of those
-into a separate blocked goroutine per message, and the scheduler contention cost
-**5.2×** — the CPU profile was 60% `runtime.lock2` under `selectgo`, with almost
-no actual work in it. It is now a `service.BatchOutput`, which keeps per-message
-nack granularity through `service.BatchError` (see [Semantics](#semantics)).
-Separately, a partly filled batch waited out [`batchLinger`](go-bridge/stream.go)
-even when every in-flight slot was already parked and the source could not
-possibly send more. That cost a further **14×** for any source that emits one
-message per batch, `file` among them; `collect` now returns immediately in that
-case, and
+**Two properties of the sink are load-bearing**, and both are worth knowing
+before changing it. It is a `service.BatchOutput` rather than a single-message
+`service.Output`, because Benthos breaks a batch bound for the latter into a
+separate blocked goroutine per message: that costs **5.2×** in scheduler
+contention alone, enough that a CPU profile is 60% `runtime.lock2` under
+`selectgo` with almost no work in it. Per-message nack granularity survives the
+change through `service.BatchError` — see [Semantics](#semantics). And
+[`collect`](go-bridge/stream.go) hands a partly filled batch over as soon as every
+in-flight slot is parked, instead of waiting out `batchLinger` for messages that
+cannot arrive until mq-bridge commits; that is worth **14×** to any source
+emitting one message per batch, `file` among them.
 `TestASourceOfSingleMessageBatchesDoesNotWaitOutTheLinger` holds the line.
 
 ## Known issues
@@ -344,22 +360,25 @@ Related: [golang/go#65050](https://github.com/golang/go/issues/65050) reports
 corruption with multiple Go `c-shared` runtimes on macOS. Until that is
 understood, allow only **one** Go-runtime plugin per process.
 
-### Only loopback connectors have been run
+### One broker connector has been run
 
 The data path is exercised by [`tests/data_path.rs`](tests/data_path.rs)
 (`socket_server` / `socket` over loopback TCP) and by the Go tests in
 [`go-bridge/stream_test.go`](go-bridge/stream_test.go), which drive
-acknowledgement through the same code the ABI calls. Nothing has been run
-against Kafka, MQTT, S3 or any other real broker, and connector-specific
-behaviour — authentication, partitioning, redelivery timing — is therefore
-unverified.
+acknowledgement through the same code the ABI calls. Beyond that only
+`beanstalkd` has faced a real broker, through the conformance suite below.
+Nothing has been run against Kafka, MQTT or S3, and connector-specific
+behaviour — authentication, partitioning, redelivery timing — is unverified for
+every connector but that one.
 
-`mq_bridge::plugin::conformance` is the acceptance gate, and it now exists as
+`mq_bridge::plugin::conformance` is the acceptance gate, and it passes as
 [`tests/conformance.rs`](tests/conformance.rs). It shares one configuration
 between input and output, so it needs a connector whose two directions take the
 same fields: `beanstalkd` takes only `address` and genuinely redelivers what a
-consumer rejects, so all four checks apply. It runs in CI against a broker
-container, and skips locally unless `MQ_BRIDGE_REDPANDA_BEANSTALKD` is set.
+consumer rejects. Three of the four checks apply — `metadata_preserved` does
+not, because a beanstalkd job carries no metadata to preserve. It runs in CI
+against a broker container, and skips locally unless
+`MQ_BRIDGE_REDPANDA_BEANSTALKD` is set.
 
 Deployment also requires **two files in the same directory**. The Rust plugin
 resolves its sibling from its own absolute path, so this is robust, but it does
@@ -401,10 +420,9 @@ Connect gives real isolation.
   mq-bridge's secret extractor, and form B makes inline secrets tempting. Use
   environment or file references.
 
-Bloblang and processors **are** supported, through form B's `pipeline` — an
-earlier revision of this file listed them as non-goals, and that is no longer
-true. Explicit non-goals remain: buffers, the HTTP management API, per-connector
-DLLs, and any claim of exactly-once or zero-copy behaviour.
+Bloblang and processors **are** supported, through form B's `pipeline`. Explicit
+non-goals: buffers, the HTTP management API, per-connector DLLs, and any claim of
+exactly-once or zero-copy behaviour.
 
 ## License
 

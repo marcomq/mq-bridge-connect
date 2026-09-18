@@ -72,7 +72,12 @@ best() {
     lowest=
     attempt=1
     while [ "$attempt" -le "$repeats" ]; do
-        value=$("$@")
+        # Without this a failed run yields an empty time, and the table below
+        # divides by it rather than reporting that the run never happened.
+        if ! value=$("$@") || [ -z "$value" ]; then
+            echo "benchmark run failed: $*" >&2
+            exit 1
+        fi
         lowest=$(awk -v a="$lowest" -v b="$value" \
             'BEGIN { if (a == "" || b + 0 < a + 0) print b; else print a }')
         attempt=$((attempt + 1))
