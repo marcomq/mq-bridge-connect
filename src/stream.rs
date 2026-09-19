@@ -2,7 +2,11 @@
 //!
 //! Every call into Go blocks: `next_batch` waits for messages, `publish` waits
 //! for delivery, `close` waits for the stream to stop. They therefore run on
-//! `spawn_blocking` threads and never on an async executor thread.
+//! `spawn_blocking` threads and never on an async executor thread. [`Drop`] is
+//! the one exception and cannot be: it closes inline, so a stream dropped
+//! without [`GoStream::close`] can stall its thread for up to
+//! [`CLOSE_TIMEOUT_MS`]. Both endpoints close through `on_disconnect_hook`, so
+//! that path is the error path, not the ordinary one.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

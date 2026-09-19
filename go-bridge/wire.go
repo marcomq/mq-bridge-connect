@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
 )
@@ -52,10 +53,46 @@ func appendBytes(buffer []byte, value []byte) []byte {
 	return append(appendU32(buffer, len(value)), value...)
 }
 
+func appendString(buffer []byte, value string) []byte {
+	return append(appendU32(buffer, len(value)), value...)
+}
+
+// Appends one length-prefixed metadata value. Connectors set numbers as often as
+// strings -- `file` a mod time, Kafka an offset and a partition -- and rendering
+// each through [metadataString] costs an allocation per message. Writing the
+// digits straight into the buffer costs none.
+func appendMetadataValue(buffer []byte, value any) []byte {
+	lengthAt := len(buffer)
+	buffer = appendU32(buffer, 0)
+	switch typed := value.(type) {
+	case string:
+		buffer = append(buffer, typed...)
+	case []byte:
+		buffer = append(buffer, typed...)
+	case int:
+		buffer = strconv.AppendInt(buffer, int64(typed), 10)
+	case int64:
+		buffer = strconv.AppendInt(buffer, typed, 10)
+	case float64:
+		buffer = strconv.AppendFloat(buffer, typed, 'g', -1, 64)
+	case bool:
+		buffer = strconv.AppendBool(buffer, typed)
+	default:
+		buffer = append(buffer, metadataString(typed)...)
+	}
+	binary.LittleEndian.PutUint32(buffer[lengthAt:], uint32(len(buffer)-lengthAt-4))
+	return buffer
+}
+
 // Encodes the messages of `runs`, which together hold exactly `total` of them,
-// into one blob for the boundary.
-func encodeRuns(runs []handedRun, total int) ([]byte, error) {
-	buffer := appendU32(make([]byte, 0, 256), total)
+// into one blob for the boundary. `hint` is what the last such blob measured:
+// starting from 256 bytes instead costs about eleven doubling reallocations,
+// and five times the blob in copied bytes, on every batch.
+func encodeRuns(runs []handedRun, total int, hint int) ([]byte, error) {
+	if hint < 256 {
+		hint = 256
+	}
+	buffer := appendU32(make([]byte, 0, hint), total)
 	for _, run := range runs {
 		for _, message := range run.parked.batch[run.start : run.start+run.count] {
 			var err error
@@ -74,18 +111,20 @@ func appendMessage(buffer []byte, message *service.Message) ([]byte, error) {
 	}
 	buffer = appendBytes(buffer, payload)
 
-	metadata := make([][2]string, 0, 4)
+	// The count is only known once the walk is over, so reserve its four bytes
+	// and fill them in afterwards rather than buffering the entries to count
+	// them.
+	countAt := len(buffer)
+	buffer = appendU32(buffer, 0)
+	count := 0
 	if err := message.MetaWalkMut(func(key string, value any) error {
-		metadata = append(metadata, [2]string{key, metadataString(value)})
+		buffer = appendMetadataValue(appendString(buffer, key), value)
+		count++
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("failed to read message metadata: %w", err)
 	}
-	buffer = appendU32(buffer, len(metadata))
-	for _, entry := range metadata {
-		buffer = appendBytes(buffer, []byte(entry[0]))
-		buffer = appendBytes(buffer, []byte(entry[1]))
-	}
+	binary.LittleEndian.PutUint32(buffer[countAt:], uint32(count))
 	return buffer, nil
 }
 

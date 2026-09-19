@@ -14,8 +14,8 @@ its job. Redpanda supplies only the I/O components.
 
 > ## ⚠️ Status: early — do not deploy
 >
-> **Messages cross the boundary in both directions**, at 1.07M msg/s in and
-> 2.29M out. A `redpanda` input consumes through a Redpanda Connect connector and
+> **Messages cross the boundary in both directions**, at 1.83M msg/s in and
+> 3.66M out. A `redpanda` input consumes through a Redpanda Connect connector and
 > a `redpanda` output publishes through one; payloads and metadata survive both
 > ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 > source message it belongs to.
@@ -50,18 +50,21 @@ deduplication, encryption, transform, switch, observability — over sinks that
 never had it.
 
 **Speed can be, too, where mq-bridge owns the faster end.** Reading a local file,
-mq-bridge moves **694 773 msg/s** against Redpanda Connect's **143 010 msg/s**
+mq-bridge moves **694 773 msg/s** against Redpanda Connect's **238 851 msg/s**
 for the same 200 000 lines, and the boundary into a Redpanda sink is free
-(`mq-bridge → file` measured 108 213 msg/s against 108 164 native). So a
+(`mq-bridge → file` measured 182 165 msg/s against 171 996 native). So a
 `file → <redpanda sink>` route through mq-bridge beats the same route inside
-Redpanda Connect whenever the sink can absorb more than 143k/s; when the sink is
+Redpanda Connect whenever the sink can absorb more than 239k/s; when the sink is
 the bottleneck it is a wash, never a loss. That is **one connector on one
 workload, measured with two different harnesses** — a reason to measure your own
-pair, not a general claim that either tool is faster.
+pair, not a general claim that either tool is faster. The Redpanda figures are
+from the run in [Throughput](#throughput-against-a-native-pipeline); the
+mq-bridge one predates it and was not re-measured alongside, so treat the ratio
+as indicative.
 
-**Do not use it for a Redpanda source into a Redpanda sink.** You would pay about
-24% on the consumer boundary
-([Throughput](#throughput-against-a-native-pipeline)), a 267 MiB library and a Go
+**Do not use it for a Redpanda source into a Redpanda sink.** You would pay the
+consumer boundary
+([Throughput](#throughput-against-a-native-pipeline)), a 253 MiB library and a Go
 runtime pinned in the process for its lifetime, and gain nothing at all. Run
 Redpanda Connect.
 
@@ -155,8 +158,11 @@ docker run --rm -p 11300:11300 schickling/beanstalkd   # or: beanstalkd -l 127.0
 MQ_BRIDGE_REDPANDA_BEANSTALKD=127.0.0.1:11300 cargo test --test conformance -- --nocapture
 ```
 
-Go build and module caches are redirected under `target/` so the repository
-stays self-contained.
+The build uses the Go toolchain's own caches (`go env GOCACHE`, `GOMODCACHE`).
+They are shared with every other Go project and trimmed automatically; an
+earlier revision pointed them under `target/`, which gave each checkout a
+private ~26 GB copy that nothing ever reclaimed. `go clean -cache -modcache`
+frees them.
 
 [`scripts/benchmark.sh`](scripts/benchmark.sh) measures the boundary against an
 identical pipeline that never leaves Go — see
@@ -202,6 +208,13 @@ an ignored key would be configuration the user believes is in effect.
 unacknowledged inside the plugin at once. It is the backpressure, and it is also
 what lets the source keep working while mq-bridge handles the previous batch. See
 [Ordering](#semantics) before lowering it.
+
+It counts batches, not messages, so the right value depends on what the source
+produces. A connector that batches is already well served by 64; one that emits
+a message at a time — `file` does, without a `batching` policy — is held to 64
+messages in flight and loses about a fifth of its throughput to the round trip.
+Raise it for those, and see
+[Throughput](#throughput-against-a-native-pipeline) for what it recovers.
 
 ## Curated components
 
@@ -303,15 +316,19 @@ entirely inside Go ([`nativebench`](go-bridge/internal/nativebench/main.go)), an
 once with mq-bridge owning an end
 ([`examples/throughput.rs`](examples/throughput.rs)). Both link the same Benthos
 engine and the same component set, so what separates the two numbers is the
-boundary and nothing else. 200 000 messages of 256 B, batches of 500,
-`max_in_flight: 64`, best of three:
+boundary and nothing else. macOS arm64 on AC power, 200 000 messages of 256 B,
+batches of 500, `max_in_flight: 64`, connect v4.110.0; best of five, and the
+second column of costs is an independent repeat of the whole run:
 
-| scenario | native | bridged | cost |
-| :--- | ---: | ---: | ---: |
-| `generate` → mq-bridge | 1 327 598 msg/s | 1 074 685 msg/s | 1.24× |
-| `file` → mq-bridge | 143 010 msg/s | 117 626 msg/s | 1.22× |
-| mq-bridge → `drop` | 1 327 598 msg/s | 2 290 531 msg/s | 0.58× |
-| mq-bridge → `file` | 108 164 msg/s | 108 213 msg/s | 1.00× |
+| scenario | native | bridged | cost | repeat |
+| :--- | ---: | ---: | ---: | ---: |
+| `generate` → mq-bridge | 1 976 285 msg/s | 1 826 117 msg/s | 1.08× | 1.07× |
+| `file` → mq-bridge | 238 851 msg/s | 199 004 msg/s | 1.20× | 1.19× |
+| mq-bridge → `drop` | 1 976 285 msg/s | 3 664 413 msg/s | 0.54× | 0.56× |
+| mq-bridge → `file` | 171 996 msg/s | 182 165 msg/s | 0.94× | 1.02× |
+
+Absolute numbers track the machine, so read the `cost` column, not the first
+two.
 
 **The plugin cannot be faster than Redpanda Connect.** It is Redpanda Connect,
 plus a boundary. The rows under 1.00× are not a win: their baseline fabricates
@@ -319,11 +336,32 @@ every message with a Bloblang mapping, which the publisher is instead handed for
 free. What those rows show is that the publisher boundary disappears into the
 noise, not that anything got faster.
 
-**The boundary costs about a quarter** in the consumer direction, and nothing
-measurable in the publisher direction. Most of that quarter is the crossing
-itself: measured in Go alone with `go test -bench`
-([`stream_bench_test.go`](go-bridge/stream_bench_test.go)), without cgo or Rust,
-the sink runs at 918 ns/message against 861 ns for a native `drop` — 6.6%.
+**The `file` row is a tuning artefact, not a boundary cost.** `file` emits one
+message per batch, and `max_in_flight` counts batches, so 64 there means 64
+messages in flight rather than 32 000 — and every one of those round-trips
+through mq-bridge before the source may refill. Raising it to 512 turns that row
+into **0.95×** (252 727 bridged against 239 047 native) and leaves the others
+where they are. Any source that does not batch wants a far higher
+`max_in_flight` than one that does; the cost is memory, since a parked message
+is a resident message.
+
+Timings need a quiet machine, but allocation is deterministic and says the same
+thing. Per message, measured in Go alone with `go test -bench`
+([`stream_bench_test.go`](go-bridge/stream_bench_test.go)), without cgo or
+Rust: a native `drop` allocates 1 189 B, the bridged sink 1 528 B. The boundary
+is the 339 B difference, and it is one blob per batch and nothing per message —
+encoding a batch of 500 allocates once, whether or not the messages carry
+metadata. Three things had to go for that to hold:
+
+- Sizing the blob from a fixed 256 B cost 1 373 B per message, because `append`
+  reached 130 KB by doubling and copying eleven times. It is now sized from what
+  the last blob measured.
+- Rendering metadata through `fmt.Sprint` cost an allocation per message as soon
+  as a connector set a number — `file` sets a mod time, Kafka an offset and a
+  partition. The digits now go straight into the blob.
+- Decoding copied every payload out of the blob. Payloads are now slices of it
+  (`Bytes` is reference-counted), so a batch of 500 costs one allocation on the
+  Rust side instead of 501.
 
 **Two properties of the sink are load-bearing**, and both are worth knowing
 before changing it. It is a `service.BatchOutput` rather than a single-message

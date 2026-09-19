@@ -242,9 +242,11 @@ func TestWireFormatRoundTrip(t *testing.T) {
 	message := service.NewMessage([]byte{0, 159, 146, 150})
 	message.MetaSetMut("text", "value")
 	message.MetaSetMut("number", 42)
+	message.MetaSetMut("ratio", 1.5)
+	message.MetaSetMut("flag", true)
 
 	parked := &parkedBatch{batch: service.MessageBatch{message}}
-	blob, err := encodeRuns([]handedRun{{parked: parked, start: 0, count: 1}}, 1)
+	blob, err := encodeRuns([]handedRun{{parked: parked, start: 0, count: 1}}, 1, 0)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
 	}
@@ -259,8 +261,12 @@ func TestWireFormatRoundTrip(t *testing.T) {
 	if string(payload) != string([]byte{0, 159, 146, 150}) {
 		t.Errorf("binary payload was altered: %v", payload)
 	}
-	if value, _ := decoded[0].MetaGet("number"); value != "42" {
-		t.Errorf("non-string metadata became %q, want \"42\"", value)
+	// Non-string metadata is appended as digits rather than rendered through
+	// fmt, so each of those types needs to survive the trip.
+	for key, want := range map[string]string{"number": "42", "ratio": "1.5", "flag": "true"} {
+		if value, _ := decoded[0].MetaGet(key); value != want {
+			t.Errorf("metadata %q became %q, want %q", key, value, want)
+		}
 	}
 	if _, err := decodeBatch(blob[:len(blob)-2]); err == nil {
 		t.Error("a truncated batch must not decode")
@@ -671,7 +677,7 @@ func TestPublishDeliversPayloadAndMetadata(t *testing.T) {
 	outgoing.MetaSetMut("origin", "mq-bridge")
 	blob, err := encodeRuns([]handedRun{{
 		parked: &parkedBatch{batch: service.MessageBatch{outgoing}}, start: 0, count: 1,
-	}}, 1)
+	}}, 1, 0)
 	if err != nil {
 		t.Fatalf("failed to encode the batch: %v", err)
 	}
@@ -768,5 +774,48 @@ func TestAParkedBatchIsReleasedOnlyOnce(t *testing.T) {
 	}
 	if len(other.ack) != 1 {
 		t.Errorf("expected exactly one release on the channel, got %d", len(other.ack))
+	}
+}
+
+// Closing while the source is still producing. StopWithin lets the source
+// finish what it had in flight, and each of those batches parks in the sink. A
+// single drain before StopWithin misses them all, and the shutdown then waits on
+// blocked source goroutines: seconds instead of milliseconds.
+func TestClosingDrainsBatchesThatArriveDuringTheShutdown(t *testing.T) {
+	const timeout = 5 * time.Second
+	// Draining throughout takes ~10ms; draining once before StopWithin took 3.7s.
+	const budget = time.Second
+
+	err := service.RegisterBatchInput("mqbrp_test_closing_source", service.NewConfigSpec(),
+		func(*service.ParsedConfig, *service.Resources) (service.BatchInput, error) {
+			return &singleMessageSource{}, nil
+		})
+	if err != nil {
+		t.Fatalf("failed to register the probe input: %v", err)
+	}
+
+	id, err := openStream(kindConsumer,
+		"max_in_flight: 8\ninput:\n  mqbrp_test_closing_source: {}\n")
+	if err != nil {
+		t.Fatalf("failed to open the stream: %v", err)
+	}
+	handle, err := lookupStream(id)
+	if err != nil {
+		t.Fatalf("the stream was not registered: %v", err)
+	}
+	defer func() { _, _ = unregisterStream(id) }()
+
+	// Leave this batch uncommitted, so the shutdown has parked work to unwind.
+	if _, _, err := handle.nextBatch(4, timeout); err != nil {
+		t.Fatalf("nextBatch failed: %v", err)
+	}
+
+	start := time.Now()
+	if err := handle.close(timeout); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > budget {
+		t.Errorf("close took %v, over its %v budget: batches parked during the "+
+			"shutdown were not drained", elapsed, budget)
 	}
 }

@@ -150,6 +150,9 @@ type streamHandle struct {
 	maxInFlight int
 	inFlight    atomic.Int64
 
+	// What the last encoded blob measured, used only to size the next one.
+	encodeHint atomic.Int64
+
 	// Guards the hand-over point, including the source batch a previous call
 	// consumed only part of.
 	collectMutex sync.Mutex
@@ -268,7 +271,8 @@ func openStream(kind uint32, source string) (uint64, error) {
 	}
 	if kind == kindConsumer {
 		// Benthos never has more than `max_in_flight` batches written at once, so
-		// this depth means a source batch never waits to be parked.
+		// up to the cap a source batch never waits to be parked. Past the cap it
+		// may, which costs nothing but the wait: `park` blocks either way.
 		handle.pending = make(chan *parkedBatch, min(config.maxInFlight, pendingCapacity))
 	}
 	id := registerStream(handle)
@@ -372,7 +376,12 @@ func (h *streamHandle) collect(max int, timeout time.Duration) (runs []handedRun
 		take(h.carry, h.carryAt)
 	}
 
-	wait := timeout
+	// Reused rather than reallocated each turn: a source that emits one message
+	// per batch -- `file` without a batching policy does -- turns this loop once
+	// per message, and a fresh timer there is an allocation per message.
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	for total < max {
 		// Lingering only pays off while the source can still produce. Once every
 		// in-flight slot is parked here, nothing more can arrive until mq-bridge
@@ -381,16 +390,14 @@ func (h *streamHandle) collect(max int, timeout time.Duration) (runs []handedRun
 		if total > 0 && len(h.pending) == 0 && h.inFlight.Load() >= int64(h.maxInFlight) {
 			return runs, total, false
 		}
-		timer := time.NewTimer(wait)
 		select {
 		case parked := <-h.pending:
-			timer.Stop()
 			take(parked, 0)
-			wait = batchLinger
+			timer.Stop()
+			timer.Reset(batchLinger)
 		case <-timer.C:
 			return runs, total, false
 		case <-h.runDone:
-			timer.Stop()
 			// The run is over, but batches parked before it ended still have to
 			// reach mq-bridge, and their acks still have to be honoured.
 			for total < max {
@@ -422,12 +429,14 @@ func (h *streamHandle) nextBatch(max int, timeout time.Duration) (uint64, []byte
 		return 0, nil, nil
 	}
 
-	blob, err := encodeRuns(runs, total)
+	blob, err := encodeRuns(runs, total, int(h.encodeHint.Load()))
 	if err != nil {
 		h.dropCarry(err)
 		abandonAll(runs, err)
 		return 0, nil, err
 	}
+	// A little over the last size, so a batch that grows slightly still fits.
+	h.encodeHint.Store(int64(len(blob) + len(blob)/8))
 
 	h.mutex.Lock()
 	h.lastBatch++
@@ -508,15 +517,33 @@ func (h *streamHandle) close(timeout time.Duration) error {
 		abandonAll(runs, errClosing)
 	}
 	h.dropCarry(errClosing)
-	for {
-		select {
-		case parked := <-h.pending:
-			parked.abandon(errClosing)
-			continue
-		default:
+
+	// Keep draining for as long as the pipeline is shutting down. StopWithin
+	// lets the source finish what it had in flight, and every one of those
+	// batches parks here and blocks its goroutine until something abandons it.
+	// Draining only once, before StopWithin, misses all of them, and the
+	// shutdown then waits those goroutines out: seconds rather than
+	// milliseconds.
+	stopDraining := make(chan struct{})
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for {
+			select {
+			case parked := <-h.pending:
+				parked.abandon(errClosing)
+			case <-stopDraining:
+				for {
+					select {
+					case parked := <-h.pending:
+						parked.abandon(errClosing)
+					default:
+						return
+					}
+				}
+			}
 		}
-		break
-	}
+	}()
 
 	err := h.stream.StopWithin(timeout)
 	h.cancel()
@@ -524,6 +551,8 @@ func (h *streamHandle) close(timeout time.Duration) error {
 	case <-h.runDone:
 	case <-time.After(timeout):
 	}
+	close(stopDraining)
+	<-drained
 	if err != nil {
 		return err
 	}

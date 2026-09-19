@@ -13,8 +13,14 @@ import sys
 from collections import Counter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GOMODCACHE = os.path.join(ROOT, "target", "go-mod-cache")
 TARGET = "aarch64-apple-darwin"
+
+
+def go_mod_cache():
+    """Where the toolchain keeps modules, so licences are read from what built."""
+    return subprocess.run(
+        ["go", "env", "GOMODCACHE"], capture_output=True, text=True, check=True
+    ).stdout.strip()
 
 LICENSE_TEXTS = {
     "ISC": "ISC License - see the crate's own LICENSE file for the copyright line.",
@@ -70,12 +76,10 @@ def copyright_of(text, spdx):
 
 
 def go_modules():
-    env = dict(os.environ)
-    env["GOMODCACHE"] = GOMODCACHE
-    env["GOCACHE"] = os.path.join(ROOT, "target", "go-build-cache")
+    cache = go_mod_cache()
     out = subprocess.run(
         ["go", "list", "-deps", "-f", "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}", "."],
-        cwd=os.path.join(ROOT, "go-bridge"), env=env, capture_output=True, text=True, check=True,
+        cwd=os.path.join(ROOT, "go-bridge"), capture_output=True, text=True, check=True,
     ).stdout
     rows = []
     for line in sorted(set(out.split("\n"))):
@@ -85,7 +89,7 @@ def go_modules():
         path, version = parts
         if path.startswith("github.com/marcomq/"):
             continue
-        directory = os.path.join(GOMODCACHE, escape_module(path) + "@" + version)
+        directory = os.path.join(cache, escape_module(path) + "@" + version)
         candidates = []
         for name in sorted(os.listdir(directory)):
             if re.match(r"(?i)^(licen[sc]e|copying)", name) and os.path.isfile(os.path.join(directory, name)):

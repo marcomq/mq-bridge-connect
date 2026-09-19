@@ -72,7 +72,7 @@ Apache-2.0 and MIT appear in this repository as LICENSE-APACHE and LICENSE-MIT.
 For BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, EPL-2.0/EDL-1.0 and Unicode-3.0,
 and for the exact
 copyright holders of every entry, see the LICENSE file inside each dependency's
-own source tree; the Go module cache under target/go-mod-cache and the Cargo
+own source tree; the Go module cache (`go env GOMODCACHE`) and the Cargo
 registry checkout retain them verbatim.
 
 

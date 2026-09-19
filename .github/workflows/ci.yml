@@ -78,9 +78,7 @@ jobs:
       # the loader smoke test three times.
       - name: Build, test and smoke
         working-directory: mq-bridge-redpanda
-        run: |
-          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)"
-          sh scripts/phase0-smoke.sh
+        run: sh scripts/phase0-smoke.sh
 
   conformance:
     name: Conformance (beanstalkd)
@@ -121,7 +119,6 @@ jobs:
       - name: Build the Go sibling
         working-directory: mq-bridge-redpanda/go-bridge
         run: |
-          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)"
           mkdir -p ../target/debug
           go build -buildmode=c-shared -o ../target/debug/libmq_bridge_redpanda_go.so .
       # The acceptance gate: round_trip, metadata_preserved, nack_redelivers and

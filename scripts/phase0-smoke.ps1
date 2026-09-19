@@ -8,8 +8,6 @@ $GoLibrary = Join-Path $OutputDir "mq_bridge_redpanda_go.dll"
 $RustLibrary = Join-Path $OutputDir "mq_bridge_redpanda.dll"
 $Smoke = Join-Path $OutputDir "phase0_smoke.exe"
 
-if (-not $env:GOCACHE) { $env:GOCACHE = Join-Path $TargetDir "go-build-cache" }
-if (-not $env:GOMODCACHE) { $env:GOMODCACHE = Join-Path $TargetDir "go-mod-cache" }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Push-Location (Join-Path $RepoDir "go-bridge")

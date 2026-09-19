@@ -14,6 +14,7 @@ doctest = false
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+bytes = "1"
 libc = "0.2"
 libloading = "0.9"
 mq-bridge = { path = "../mq-bridge", default-features = false }

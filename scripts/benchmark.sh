@@ -7,9 +7,6 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 target_dir=${CARGO_TARGET_DIR:-"$repo_dir/target"}
-GOCACHE=${GOCACHE:-"$target_dir/go-build-cache"}
-GOMODCACHE=${GOMODCACHE:-"$target_dir/go-mod-cache"}
-export GOCACHE GOMODCACHE
 
 messages=${MESSAGES:-200000}
 batch=${BATCH:-500}

@@ -11,12 +11,27 @@
 //! ```
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use anyhow::{bail, Result};
+use bytes::Bytes;
 use mq_bridge::CanonicalMessage;
 
 pub(crate) fn encode(messages: &[CanonicalMessage]) -> Vec<u8> {
-    let mut blob = Vec::with_capacity(64 * messages.len());
+    // Every length is O(1) to read, so the exact size is cheaper to compute than
+    // the reallocation and copying that guessing it costs.
+    let size = 4 + messages
+        .iter()
+        .map(|message| {
+            8 + message.payload.len()
+                + message
+                    .metadata
+                    .iter()
+                    .map(|(key, value)| 8 + key.len() + value.len())
+                    .sum::<usize>()
+        })
+        .sum::<usize>();
+    let mut blob = Vec::with_capacity(size);
     blob.extend_from_slice(&(messages.len() as u32).to_le_bytes());
     for message in messages {
         push_bytes(&mut blob, &message.payload);
@@ -29,22 +44,29 @@ pub(crate) fn encode(messages: &[CanonicalMessage]) -> Vec<u8> {
     blob
 }
 
-pub(crate) fn decode(blob: &[u8]) -> Result<Vec<CanonicalMessage>> {
+/// Takes the batch buffer by value so each payload can be a slice of it rather
+/// than a copy: `Bytes` is reference-counted, so a batch of 500 costs one
+/// allocation here instead of 501. The whole buffer stays alive while any of its
+/// messages does, which is the right trade while a batch travels together.
+pub(crate) fn decode(blob: Bytes) -> Result<Vec<CanonicalMessage>> {
     if blob.is_empty() {
         return Ok(Vec::new());
     }
-    let mut reader = Reader { blob, offset: 0 };
+    let mut reader = Reader {
+        blob: &blob,
+        offset: 0,
+    };
     let count = reader.u32()?;
     let mut messages = Vec::with_capacity(count as usize);
     for _ in 0..count {
-        let payload = reader.bytes()?.to_vec();
+        let payload = reader.range()?;
         let meta_count = reader.u32()?;
         let mut metadata = HashMap::with_capacity(meta_count as usize);
         for _ in 0..meta_count {
             let key = reader.string()?;
             metadata.insert(key, reader.string()?);
         }
-        let mut message = CanonicalMessage::from(payload);
+        let mut message = CanonicalMessage::new_bytes(blob.slice(payload), None);
         message.metadata = metadata;
         messages.push(message);
     }
@@ -77,14 +99,20 @@ impl Reader<'_> {
         Ok(u32::from_le_bytes(field.try_into().expect("4 bytes")))
     }
 
-    fn bytes(&mut self) -> Result<&[u8]> {
+    /// Where the next field sits in the blob, rather than its bytes, so a caller
+    /// holding the blob can slice it instead of copying out of it.
+    fn range(&mut self) -> Result<Range<usize>> {
         let length = self.u32()? as usize;
         let end = self.offset + length;
-        let Some(field) = self.blob.get(self.offset..end) else {
+        if end > self.blob.len() {
             bail!("truncated message batch");
-        };
-        self.offset = end;
-        Ok(field)
+        }
+        Ok(std::mem::replace(&mut self.offset, end)..end)
+    }
+
+    fn bytes(&mut self) -> Result<&[u8]> {
+        let field = self.range()?;
+        Ok(&self.blob[field])
     }
 
     fn string(&mut self) -> Result<String> {
@@ -105,13 +133,28 @@ mod tests {
         message
     }
 
+    /// The capacity is computed, not guessed, so it must land exactly: too small
+    /// reallocates on every publish, too large wastes the headroom.
+    #[test]
+    fn the_reserved_capacity_is_exactly_what_encoding_uses() {
+        for sent in [
+            vec![message("first", &[("source", "test")]), message("x", &[])],
+            vec![message("", &[])],
+            vec![message(&"p".repeat(4096), &[("k", &"v".repeat(500))])],
+            Vec::new(),
+        ] {
+            let blob = encode(&sent);
+            assert_eq!(blob.len(), blob.capacity(), "for {} messages", sent.len());
+        }
+    }
+
     #[test]
     fn round_trips_payloads_and_metadata() {
         let sent = vec![
             message("first", &[("source", "test"), ("kafka_key", "k1")]),
             message("second", &[]),
         ];
-        let received = decode(&encode(&sent)).unwrap();
+        let received = decode(Bytes::from(encode(&sent))).unwrap();
 
         assert_eq!(received.len(), 2);
         assert_eq!(received[0].payload.as_ref(), b"first");
@@ -122,29 +165,48 @@ mod tests {
         assert!(received[1].metadata.is_empty());
     }
 
+    /// Payloads are slices of the batch buffer, not copies of it. A regression
+    /// here is invisible in behaviour and costs an allocation and a copy of
+    /// every payload in every batch.
+    #[test]
+    fn decoded_payloads_borrow_the_batch_buffer() {
+        let blob = Bytes::from(encode(&[
+            message("first", &[("source", "test")]),
+            message("second", &[]),
+        ]));
+        let range = blob.as_ptr() as usize..blob.as_ptr() as usize + blob.len();
+
+        for received in decode(blob.clone()).unwrap() {
+            assert!(
+                range.contains(&(received.payload.as_ptr() as usize)),
+                "payload was copied out of the batch buffer"
+            );
+        }
+    }
+
     #[test]
     fn round_trips_binary_payloads_untouched() {
         let sent = vec![message("", &[])];
         let mut sent = sent;
         sent[0].payload = vec![0u8, 159, 146, 150, 255].into();
 
-        let received = decode(&encode(&sent)).unwrap();
+        let received = decode(Bytes::from(encode(&sent))).unwrap();
         assert_eq!(received[0].payload.as_ref(), &[0u8, 159, 146, 150, 255]);
     }
 
     #[test]
     fn an_empty_blob_is_an_empty_batch() {
-        assert!(decode(&[]).unwrap().is_empty());
-        assert!(decode(&encode(&[])).unwrap().is_empty());
+        assert!(decode(Bytes::new()).unwrap().is_empty());
+        assert!(decode(Bytes::from(encode(&[]))).unwrap().is_empty());
     }
 
     #[test]
     fn truncated_and_overlong_blobs_are_rejected() {
         let blob = encode(&[message("payload", &[("k", "v")])]);
-        assert!(decode(&blob[..blob.len() - 3]).is_err());
+        assert!(decode(Bytes::from(blob[..blob.len() - 3].to_vec())).is_err());
 
         let mut trailing = blob.clone();
         trailing.push(0);
-        assert!(decode(&trailing).is_err());
+        assert!(decode(Bytes::from(trailing)).is_err());
     }
 }

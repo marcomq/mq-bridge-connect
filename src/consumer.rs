@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use bytes::Bytes;
 use mq_bridge::errors::ConsumerError;
 use mq_bridge::traits::{BatchCommitFunc, BoxFuture, MessageConsumer, MessageDisposition};
 use mq_bridge::ReceivedBatch;
@@ -64,7 +65,7 @@ impl MessageConsumer for RedpandaConsumer {
             return Err(ConsumerError::EndOfStream);
         };
 
-        let messages = wire::decode(&blob).map_err(ConsumerError::Permanent)?;
+        let messages = wire::decode(Bytes::from(blob)).map_err(ConsumerError::Permanent)?;
         if messages.is_empty() {
             return Ok(ReceivedBatch::empty());
         }
