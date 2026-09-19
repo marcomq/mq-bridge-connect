@@ -1,0 +1,64 @@
+# A Redpanda Connect connector as an endpoint of the `mqb` CLI / server, with no
+# code at all. The plugin is a shared library this binary never compiled.
+#
+#   cargo build --lib
+#   (cd go-bridge && go build -buildmode=c-shared \
+#       -o ../target/debug/libmq_bridge_redpanda_go.dylib .)   # .so on Linux
+#   MQB_PLUGIN_DIR=$PWD/target/debug mqb --config examples/mqb-route.yaml
+#
+# The Rust cdylib and the Go sibling must sit in the same directory: the plugin
+# resolves its sibling next to itself. `MQ_BRIDGE_REDPANDA_GO_LIBRARY` (absolute
+# path) overrides that when they cannot be colocated.
+#
+# The same file runs unchanged in the desktop UI and behind the Python and
+# Node bindings — one config format, three ways to run it.
+
+plugins:
+  - "${MQB_PLUGIN_DIR}/libmq_bridge_redpanda.dylib"
+
+routes:
+  redpanda_demo:
+    # Form A: `connector` is the Redpanda Connect component name; every other
+    # field is that component's own configuration.
+    input:
+      custom:
+        name: redpanda
+        config:
+          connector: generate
+          count: 10
+          interval: ""
+          mapping: "root.id = counter()"
+
+    # Form B: a Redpanda Connect document without the `input` section, which
+    # mq-bridge owns. Use it for processors and stream-level fields.
+    output:
+      custom:
+        name: redpanda
+        config:
+          yaml: |
+            # Above 1 the sink may write batches out of source order.
+            max_in_flight: 4
+            pipeline:
+              processors:
+                - bloblang: 'root = this'
+            output:
+              file:
+                path: target/mqb-route-output.jsonl
+      # mq-bridge middleware wrapping a Redpanda connector — the reason to run
+      # the connector here rather than inside a Redpanda Connect pipeline.
+      # Both are publisher-side: `retry` is ignored on an input endpoint.
+      middlewares:
+        - retry:
+            max_attempts: 3
+            initial_interval_ms: 100
+        - dlq:
+            endpoint:
+              file:
+                path: target/mqb-route-dlq.jsonl
+
+    # mq-bridge's batching, not the connector's: the source batch is split or
+    # aggregated to this size and acknowledged as one unit.
+    batch_size: 5
+    # A route config defaults to 1; `mqb copy` and MCP default to 4, where whole
+    # batches may reach the sink out of source order.
+    concurrency: 1

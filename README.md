@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/marcomq/mq-bridge-redpanda/actions/workflows/ci.yml/badge.svg)](https://github.com/marcomq/mq-bridge-redpanda/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-![Status](https://img.shields.io/badge/status-early%20(loopback%20verified)-orange)
+![Status](https://img.shields.io/badge/status-early%20(broker%20verified%20in%20CI)-orange)
 
 A Redpanda Connect **connector** compatibility plugin for
 [`mq-bridge`](https://github.com/marcomq/mq-bridge).
@@ -12,7 +12,7 @@ endpoints **without** running a Redpanda Connect pipeline. `mq-bridge` stays the
 engine — routing, batching, middleware, retries, DLQ and transformations remain
 its job. Redpanda supplies only the I/O components.
 
-> ## ⚠️ Status: early — do not deploy
+> ## ⚠️ Status: early — perform your own testing before you deploy
 >
 > **Messages cross the boundary in both directions**, at 1.83M msg/s in and
 > 3.66M out. A `redpanda` input consumes through a Redpanda Connect connector and
@@ -20,20 +20,43 @@ its job. Redpanda supplies only the I/O components.
 > ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 > source message it belongs to.
 >
-> **The acceptance gate now passes against a real broker.**
+> **The acceptance gate passes against three real brokers, in CI.**
 > `mq_bridge::plugin::conformance` ([`tests/conformance.rs`](tests/conformance.rs))
-> runs `round_trip`, `nack_redelivers` and `uncommitted_batch_redelivers` against
-> a live beanstalkd, green five times consecutively. That is the first connector
-> that talks to a broker, and it exercises redelivery for real rather than
-> through a scripted source. `metadata_preserved` is skipped because a beanstalkd
-> job is a body and nothing else; boundary metadata is covered by other tests.
+> runs against a live beanstalkd, NATS JetStream and Redis on every push, each
+> held to what its transport actually guarantees:
 >
-> **What still gates the next status.** No Linux build has ever succeeded — the
-> first CI run failed to link, and the fix in this tree is unverified until CI
-> runs again. `beanstalkd` is also one connector; treat the other 50 inputs and
-> 62 outputs as unverified.
+> | Connector | Transport | Checks |
+> | :--- | :--- | :--- |
+> | `beanstalkd` | work queue | `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` |
+> | `nats_jetstream` | persistent stream | `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` |
+> | `redis_list` | work queue, no redelivery | `round_trip` |
 >
-> What *is* verified: 13 Go tests (race-clean) and 17 Rust tests, covering
+> Two independent transports now prove redelivery for real, rather than through
+> a scripted source. A missing broker is a hard failure under CI, so the gate
+> cannot quietly degrade into a skip, and each test asserts the exact set of
+> checks its transport supports — a check that stops applying fails rather than
+> vanishing.
+>
+> **Linux and macOS both build, link and pass clippy** — the earlier link
+> failure is fixed and CI is green on both.
+>
+> **What still gates the next status, and why you should test first.** Three
+> connectors cover 6 of the 114 endpoint components, so the connector you are
+> about to use is still most likely one of the other 108. The risk is no longer
+> that this does not build — it is that your connector has never been run
+> against a live broker through this boundary. Run the conformance suite against
+> yours before you rely on it. Windows is documented but never built in CI.
+>
+> **Coverage is limited by the suite's shape, not by the connectors.** The
+> conformance suite shares one configuration between input and output, so it can
+> only address connectors whose two directions take the same fields. That
+> excludes `mqtt` (`topics` vs `topic`), `amqp_0_9` (`queue` vs `exchange`) and
+> `redis_streams` (`streams` vs `stream`), and it is why neither NATS connector
+> can be checked for metadata: the output's `metadata` filter would have to be
+> configured, and the input rejects a field it does not define. A
+> direction-aware configuration form would unlock all of them at once.
+>
+> What *is* verified: 14 Go tests (race-clean) and 21 Rust tests, covering
 > acknowledgement granularity, batch splitting and aggregation, release-once
 > semantics, the wire format, configuration, and `socket_server` / `socket` over
 > loopback TCP. The loader contract holds across 150 consecutive
@@ -149,13 +172,60 @@ cd go-bridge && go test -race ./...
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of it on every
 push: `gofmt`, `go vet` and `go test -race`; `cargo fmt`, `cargo clippy -D
 warnings` and the smoke script on both Linux and macOS; and the conformance
-suite against a real beanstalkd broker.
+suite against beanstalkd, NATS JetStream and Redis.
 
-The conformance suite needs a broker and skips without one. To run it locally:
+Each connector's test skips when its broker is absent, so you can run one
+without the others. NATS and Redis come from the host repository's compose
+files, which CI reuses rather than duplicating, so the broker versions stay in
+step with the ones mq-bridge itself tests against:
 
 ```sh
-docker run --rm -p 11300:11300 schickling/beanstalkd   # or: beanstalkd -l 127.0.0.1 -p 11300
-MQ_BRIDGE_REDPANDA_BEANSTALKD=127.0.0.1:11300 cargo test --test conformance -- --nocapture
+docker run --rm -d -p 11300:11300 schickling/beanstalkd
+docker compose -f ../mq-bridge/tests/integration/docker-compose/nats.yml up -d --wait
+docker compose -f ../mq-bridge/tests/integration/docker-compose/redis.yml up -d --wait
+
+MQ_BRIDGE_REDPANDA_BEANSTALKD=127.0.0.1:11300 \
+MQ_BRIDGE_REDPANDA_NATS=127.0.0.1:4222 \
+MQ_BRIDGE_REDPANDA_REDIS=127.0.0.1:6379 \
+    cargo test --test conformance -- --nocapture
+```
+
+The JetStream test takes about 30s: an uncommitted batch only returns once
+`ack_wait` expires, and that is an input-only field the shared config cannot
+shorten.
+
+## Examples
+
+Four ways to drive the same connector, in [`examples/`](examples/), plus the
+benchmark harness. None of them needs a broker: they run a Redpanda Connect
+`generate` input into a `file` output, so the only thing exercised is the
+boundary.
+
+| Example | What it shows |
+| :--- | :--- |
+| [`quickstart.rs`](examples/quickstart.rs) | The shortest crossing: create a consumer, receive one batch, commit it. ~50 lines. |
+| [`route.rs`](examples/route.rs) | A full route — both config forms, both directions, middleware, a handler, clean shutdown. |
+| [`mqb-route.yaml`](examples/mqb-route.yaml) | The same route for the `mqb` CLI / server and the desktop UI, with no code at all. |
+| [`python_route.py`](examples/python_route.py) | The same route from Python, loading the plugin at runtime. |
+| [`throughput.rs`](examples/throughput.rs) | The benchmark harness behind the numbers above. |
+
+The Rust examples run as ordinary binaries, so they do not sit next to the Go
+sibling the way the cdylib does. Point at it explicitly:
+
+```sh
+cargo build --lib
+(cd go-bridge && go build -buildmode=c-shared \
+    -o ../target/debug/libmq_bridge_redpanda_go.dylib .)   # .so on Linux
+
+MQ_BRIDGE_REDPANDA_GO_LIBRARY=$PWD/target/debug/libmq_bridge_redpanda_go.dylib \
+    cargo run --example quickstart
+```
+
+`mqb` and Python load the plugin instead, which finds the Go sibling beside it:
+
+```sh
+MQB_PLUGIN_DIR=$PWD/target/debug mqb --config examples/mqb-route.yaml
+python examples/python_route.py
 ```
 
 The build uses the Go toolchain's own caches (`go env GOCACHE`, `GOMODCACHE`).
