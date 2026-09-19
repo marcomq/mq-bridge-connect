@@ -30,9 +30,11 @@ mkdir -p "$target_dir/$profile"
     cargo build --locked --lib --bin phase0_smoke
 )
 
+# The conformance suite needs a live broker, so CI runs it in its own job; this
+# script covers what a machine without one can check.
 (
     cd "$repo_dir"
-    cargo test --locked --lib --test data_path --test conformance
+    cargo test --locked --lib --test data_path
 )
 
 run=1
