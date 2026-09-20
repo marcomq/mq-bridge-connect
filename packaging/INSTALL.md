@@ -21,6 +21,18 @@ So: copy the whole directory, or copy the notices alongside whatever you copy.
 If you repackage these libraries into an image, a formula or a package, install
 the notices into the image too — not only into a source tarball.
 
+## Installing it with a package manager
+
+Homebrew and conda do everything below for you — both libraries in one
+directory mq-bridge already searches, and the notices installed alongside:
+
+```console
+brew install marcomq/tap/mq-bridge-redpanda
+conda install -c marcomq mq-bridge-redpanda
+```
+
+The rest of this file is for installing the archive by hand.
+
 ## Where to put it
 
 mq-bridge resolves a plugin by the endpoint name a route asks for, looking for

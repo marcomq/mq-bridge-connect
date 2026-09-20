@@ -46,20 +46,36 @@ jobs:
           git diff --exit-code THIRD_PARTY_NOTICES
 
   archive:
-    name: Archive (${{ matrix.os }})
+    name: Archive (${{ matrix.target }})
     needs: notices
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    defaults:
+      run:
+        # The Windows leg runs the same staging and packing scripts as the
+        # others; only the library file names differ, and those come from the
+        # matrix. Intel macOS is deliberately not built.
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            target: linux-x86_64
-            extension: so
+            target: x86_64-unknown-linux-gnu
+            rust_library: libmq_bridge_redpanda.so
+            go_library: libmq_bridge_redpanda_go.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rust_library: libmq_bridge_redpanda.so
+            go_library: libmq_bridge_redpanda_go.so
           - os: macos-latest
-            target: macos-aarch64
-            extension: dylib
+            target: aarch64-apple-darwin
+            rust_library: libmq_bridge_redpanda.dylib
+            go_library: libmq_bridge_redpanda_go.dylib
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_library: mq_bridge_redpanda.dll
+            go_library: mq_bridge_redpanda_go.dll
     steps:
       - uses: actions/checkout@v7
         with:
@@ -80,10 +96,12 @@ jobs:
 
       - name: Build both libraries
         working-directory: mq-bridge-redpanda
+        env:
+          CGO_ENABLED: "1"
         run: |
           mkdir -p target/release
           (cd go-bridge && go build -buildmode=c-shared \
-              -o ../target/release/libmq_bridge_redpanda_go.${{ matrix.extension }} .)
+              -o ../target/release/${{ matrix.go_library }} .)
           cargo build --locked --release --lib
 
       # The two libraries and the notices travel as one unit. Anything that
@@ -97,11 +115,11 @@ jobs:
           else
             version="${GITHUB_REF_NAME}"
           fi
-          name="mq-bridge-redpanda-${version}-${{ matrix.target }}"
+          name="mq-bridge-redpanda-${version#v}-${{ matrix.target }}"
           echo "ARCHIVE_NAME=${name}" >> "$GITHUB_ENV"
           mkdir -p "stage/${name}"
-          cp "target/release/libmq_bridge_redpanda.${{ matrix.extension }}" "stage/${name}/"
-          cp "target/release/libmq_bridge_redpanda_go.${{ matrix.extension }}" "stage/${name}/"
+          cp "target/release/${{ matrix.rust_library }}" "stage/${name}/"
+          cp "target/release/${{ matrix.go_library }}" "stage/${name}/"
           cp THIRD_PARTY_NOTICES LICENSE-MIT LICENSE-APACHE "stage/${name}/"
           cp packaging/INSTALL.md "stage/${name}/"
 
@@ -112,8 +130,8 @@ jobs:
         run: |
           missing=0
           for required in \
-              "libmq_bridge_redpanda.${{ matrix.extension }}" \
-              "libmq_bridge_redpanda_go.${{ matrix.extension }}" \
+              "${{ matrix.rust_library }}" \
+              "${{ matrix.go_library }}" \
               THIRD_PARTY_NOTICES LICENSE-MIT LICENSE-APACHE INSTALL.md; do
             if [ ! -s "stage/${ARCHIVE_NAME}/${required}" ]; then
               echo "release archive is missing ${required}" >&2
@@ -126,11 +144,15 @@ jobs:
         working-directory: mq-bridge-redpanda/stage
         run: |
           tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
-          shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          else
+            shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARCHIVE_NAME }}
+          name: standalone-${{ matrix.target }}
           path: |
             mq-bridge-redpanda/stage/${{ env.ARCHIVE_NAME }}.tar.gz
             mq-bridge-redpanda/stage/${{ env.ARCHIVE_NAME }}.tar.gz.sha256
@@ -158,3 +180,88 @@ jobs:
             is self-contained: it carries the full text of every licence linked
             into these binaries, and the source locations for the MPL-2.0
             modules. Keep the whole directory together when you deploy it.
+
+  conda:
+    name: Conda ${{ matrix.target }} package
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-64
+            runner: ubuntu-latest
+            artifact: standalone-x86_64-unknown-linux-gnu
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+            artifact: standalone-aarch64-unknown-linux-gnu
+          - target: osx-arm64
+            runner: macos-latest
+            artifact: standalone-aarch64-apple-darwin
+          - target: win-64
+            runner: windows-latest
+            artifact: standalone-x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the standalone archive
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release-dist
+
+      # The recipe compiles nothing; it installs these files, notices included.
+      # Each package is built on its own platform's runner so the recipe's
+      # `if: win` branch runs on the host it was written for.
+      - name: Stage the libraries for the recipe
+        run: |
+          set -euo pipefail
+          mkdir -p packaging/conda/stage
+          tar xzf release-dist/mq-bridge-redpanda-*.tar.gz \
+            -C packaging/conda/stage --strip-components=1
+          echo "MQ_BRIDGE_PLUGIN_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build the conda package
+        uses: prefix-dev/rattler-build-action@1ca5f45832f419a46d1326ccc5861d7e14d67c44 # v0.2.39
+        with:
+          recipe-path: packaging/conda/recipe.yaml
+          build-args: --target-platform=${{ matrix.target }} -c conda-forge
+          artifact-name: conda-${{ matrix.target }}
+
+  publish-conda:
+    name: Publish conda packages
+    needs: conda
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download conda packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: conda-*
+          path: conda-packages
+          merge-multiple: true
+
+      # A missing token fails the job instead of warning: a release that
+      # quietly publishes nothing is the worse outcome.
+      - name: Upload to Anaconda.org
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANACONDA_API_TOKEN}" ]; then
+            echo "::error::ANACONDA_API_TOKEN is not configured; nothing was published"
+            exit 1
+          fi
+          mapfile -t packages < <(find conda-packages -type f -name '*.conda' | sort)
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::error::no conda packages were produced"
+            exit 1
+          fi
+          pipx install --include-deps anaconda-client
+          anaconda upload --user marcomq --label main "${packages[@]}"

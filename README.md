@@ -131,6 +131,22 @@ management, buffer pairing, status mapping and panic containment that the Rust
 SDK already provides. A `c-shared` sibling keeps mq-bridge's tested ABI on the
 Rust side and a small private ABI in between.
 
+## Install
+
+Prebuilt for macOS arm64, Linux x86_64/arm64 and Windows x86_64:
+
+```console
+brew install marcomq/tap/mq-bridge-redpanda
+conda install -c marcomq mq-bridge-redpanda
+```
+
+Either puts both libraries, and the third-party notices, where mq-bridge looks
+for them; a route can then name the `redpanda` endpoint with no further setup.
+The release archives are the same files for a manual install — see
+[packaging/INSTALL.md](packaging/INSTALL.md).
+
+The requirements below are for **building** it, not for using it.
+
 ## Requirements
 
 | Tool | Version |

@@ -1,0 +1,69 @@
+schema_version: 1
+
+context:
+  version: ${{ env.get("MQ_BRIDGE_PLUGIN_VERSION") }}
+
+package:
+  name: mq-bridge-redpanda
+  version: ${{ version }}
+
+# Nothing is compiled here. `stage/` holds the prebuilt archive the release
+# publishes, so the conda package ships the same two libraries as the GitHub
+# release rather than a separately built copy.
+source:
+  path: stage
+  # CI stages exactly what belongs in the package; gitignore rules must not
+  # quietly drop a library on the way in.
+  use_gitignore: false
+
+build:
+  number: 0
+  # Both libraries go in one directory: the plugin loads its Go sibling from
+  # beside itself. That directory is `<prefix>/lib/mq-bridge` on Unix and
+  # `Library\bin` on Windows, both of which mq-bridge probes by default.
+  #
+  # THIRD_PARTY_NOTICES travels with them. It carries the full text of every
+  # licence linked into these binaries, so a package that dropped it would be a
+  # distribution missing required notices.
+  script:
+    content:
+      - if: win
+        then:
+          - if not exist "%LIBRARY_BIN%" mkdir "%LIBRARY_BIN%"
+          - copy /Y mq_bridge_redpanda.dll "%LIBRARY_BIN%"
+          - copy /Y mq_bridge_redpanda_go.dll "%LIBRARY_BIN%"
+        else:
+          - mkdir -p "${PREFIX}/lib/mq-bridge"
+          - cp libmq_bridge_redpanda.* libmq_bridge_redpanda_go.* "${PREFIX}/lib/mq-bridge/"
+
+tests:
+  - package_contents:
+      files:
+        - if: win
+          then:
+            - Library/bin/mq_bridge_redpanda.dll
+            - Library/bin/mq_bridge_redpanda_go.dll
+          else:
+            - lib/mq-bridge/libmq_bridge_redpanda.*
+            - lib/mq-bridge/libmq_bridge_redpanda_go.*
+
+about:
+  homepage: https://github.com/marcomq/mq-bridge-redpanda
+  repository: https://github.com/marcomq/mq-bridge-redpanda
+  documentation: https://marcomq.github.io/mq-bridge/
+  summary: Redpanda Connect compatibility plugin for mq-bridge
+  description: |
+    A loadable endpoint plugin that runs Redpanda Connect (Benthos) components
+    inside mq-bridge. It is a pair of shared libraries, not a program: install
+    them into the same environment as mq-bridge-app, or any environment whose
+    mq-bridge host searches this prefix, and routes can then use the `redpanda`
+    endpoint.
+  license: MIT OR Apache-2.0
+  license_file:
+    - LICENSE-MIT
+    - LICENSE-APACHE
+    - THIRD_PARTY_NOTICES
+
+extra:
+  recipe-maintainers:
+    - marcomq

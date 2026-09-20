@@ -8,3 +8,5 @@
 __pycache__/
 # `go test -cpuprofile` keeps the compiled test binary.
 /go-bridge/*.test
+/packaging/conda/stage/
+/packaging/conda/output/
