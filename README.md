@@ -283,6 +283,39 @@ A block is optional, and a field inside one overrides the same field outside it
 disconnects the older session when two clients present the same one. A connector
 that genuinely has a field called `input` or `output` needs form B.
 
+**From a URI.** The scheme names the component after a `+`, the spelling
+`git+ssh://` and `postgresql+psycopg2://` made familiar, and the rest of the URI
+is read as that component's:
+
+```sh
+mq-bridge --input 'redpanda+mqtt://localhost:1883/orders' --output 'file:///tmp/out.jsonl'
+```
+
+That is the same configuration as the first example above. The authority is the
+broker's address and the path is the topic, queue or subject; each is written
+into whichever field the component names it by, in this direction:
+
+| Component | Address | Reading | Writing |
+| :--- | :--- | :--- | :--- |
+| `mqtt` | `urls: [tcp://…]` | `topics` | `topic` |
+| `amqp_0_9` | `urls: [amqp://…]` | `queue` | `key`, with the default exchange |
+| `amqp_1` | `urls: [amqp://…]` | `source_address` | `target_address` |
+| `nats`, `nats_jetstream` | `urls: [nats://…]` | `subject` | `subject` |
+| `pulsar` | `url: pulsar://…` | `topics` | `topic` |
+| `redis_streams` | `url: redis://…` | `streams` | `stream` |
+| `redis_pubsub` | `url: redis://…` | `channels` | `channel` |
+
+Every other field is a query parameter, and any field given by its own name wins
+over what the URI would have filled. A component outside the table is configured
+by its own field names, and keeps `address` and `topic` as its own — `beanstalkd`
+takes an address and `nsq` a topic, so translating them there would break a
+configuration that works today.
+
+A URI scheme may hold only letters, digits, `+`, `-` and `.`
+([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.1)), so a component
+whose name contains `_` is spelled with `-`: `redpanda+amqp-0-9://`. No
+component name contains a `-`, which is what makes the way back unambiguous.
+
 **Form B — a Redpanda Connect configuration**, minus the end mq-bridge owns.
 This is the form to reach for if you already know Redpanda Connect.
 
@@ -313,9 +346,14 @@ Raise it for those, and see
 
 The plugin describes its configuration to the host as a JSON Schema (plugin ABI
 1.1), so a host can render a form for it and give a URI's values their types.
-Only the keys the two forms own are described — `connector`, `yaml`, `input` and
-`output` — because form A's remaining fields belong to whichever component
-`connector` names, and the host cannot know those.
+Only the keys the two forms own are described — `connector`, `address`, `topic`,
+`yaml`, `input` and `output` — because form A's remaining fields belong to
+whichever component `connector` names, and the host cannot know those.
+
+The first three carry the `x-mqb-uri` annotations that make the URI form work:
+`connector` takes the scheme's part after the `+`, `address` the authority and
+`topic` the path. They are ordinary configuration keys too, so the same
+shorthand is available in JSON and YAML.
 
 Set `MQB_PLUGIN_VALIDATE_CONFIG=1` and the host checks a route's configuration
 against that schema before the endpoint is opened. It is off by default, and the

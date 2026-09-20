@@ -76,8 +76,9 @@ pub(crate) fn stream_config(direction: Direction, config: &Value) -> Result<Stri
         (Some(yaml), None) => raw_yaml(fields, yaml),
         (None, Some(connector)) => synthesize(direction, fields, connector),
         (None, None) => bail!(
-            "configuration must set either `connector` (a Redpanda Connect component name) \
-             or `yaml` (a Redpanda Connect configuration)"
+            "configuration must set either `connector` (a Redpanda Connect component name, \
+             which a URI spells `redpanda+<component>://`) or `yaml` (a Redpanda Connect \
+             configuration)"
         ),
     }
 }
@@ -90,9 +91,11 @@ pub(crate) fn stream_config(direction: Direction, config: &Value) -> Result<Stri
 /// `additionalProperties` stays open and the exclusion of the two forms is left
 /// to [`stream_config`], which reports it by name.
 pub(crate) fn config_schema() -> Value {
-    // `connector` claims the path so the pre-schema mapping -- the whole URI as
-    // `url` -- does not fire: this endpoint has no `url` field, and form B
-    // rejects any key beside `yaml`.
+    // The three annotated fields spell out `redpanda+mqtt://host:1883/orders`.
+    // Claiming a position also suppresses the pre-schema mapping -- the whole
+    // URI as `url` -- which this endpoint could not accept: form B rejects any
+    // key beside `yaml`, and form A would forward `url` to a component that
+    // has no such field.
     serde_json::json!({
         "type": "object",
         "title": "Redpanda Connect connector",
@@ -102,6 +105,21 @@ pub(crate) fn config_schema() -> Value {
                 "title": "Component name",
                 "description": "The Redpanda Connect component to run at this end, such as \
                                 `mqtt`. The object's remaining fields are that component's own.",
+                "x-mqb-uri": "subscheme"
+            },
+            "address": {
+                "type": "string",
+                "title": "Broker address",
+                "description": "Where the component connects, as a URI. Written into whichever \
+                                field the component names it by, for the components listed in \
+                                the README.",
+                "x-mqb-uri": "origin"
+            },
+            "topic": {
+                "type": "string",
+                "title": "Topic, queue or subject",
+                "description": "What is read or written at that address. Written into whichever \
+                                field the component names it by in this direction.",
                 "x-mqb-uri": "path"
             },
             "yaml": {
@@ -153,9 +171,14 @@ fn synthesize(
     if connector.trim().is_empty() {
         bail!("`connector` must not be empty");
     }
+    // A URI scheme cannot hold `_` (RFC 3986 section 3.1), so `amqp_0_9` is
+    // spelled `redpanda+amqp-0-9://`. No component name contains a `-`, which
+    // is what makes the way back unambiguous.
+    let connector = connector.replace('-', "_");
 
     let mut component = fields.clone();
     component.remove("connector");
+    place_uri_fields(direction, &connector, &mut component)?;
 
     // Most connectors name the same field differently in each direction --
     // `mqtt` reads `topics` and writes `topic`, `amqp_0_9` reads a queue and
@@ -171,6 +194,142 @@ fn synthesize(
         direction.section(): { connector: Value::Object(component) },
     });
     serde_json::to_string(&document).map_err(|error| anyhow!("{error}"))
+}
+
+/// One field a piece of a URI is written into.
+enum Slot {
+    /// The value as it stands.
+    Scalar(&'static str),
+    /// The value as the one-element list the component expects.
+    List(&'static str),
+    /// A constant the URI's shape implies, whatever the value is.
+    Fixed(&'static str, &'static str),
+}
+
+/// Where a URI's address and topic go in one component's own configuration.
+struct UriFields {
+    /// The scheme the address field expects. It is rarely the one that named
+    /// the component: `mqtt` connects over `tcp://`.
+    scheme: &'static str,
+    address: Slot,
+    consumer: &'static [Slot],
+    publisher: &'static [Slot],
+}
+
+/// The components a URI can address.
+///
+/// Every component names its address and its topic differently, and differently
+/// again in each direction, so this is a table rather than a rule. A component
+/// outside it is configured by its own field names, which is always available
+/// and is what the rest of the catalogue uses.
+fn uri_fields(connector: &str) -> Option<UriFields> {
+    use Slot::{Fixed, List, Scalar};
+    let fields = match connector {
+        "mqtt" => UriFields {
+            scheme: "tcp",
+            address: List("urls"),
+            consumer: &[List("topics")],
+            publisher: &[Scalar("topic")],
+        },
+        // A sink with no exchange publishes to the default one, where the
+        // routing key is the queue's name -- the other half of what a URI's
+        // path means here.
+        "amqp_0_9" => UriFields {
+            scheme: "amqp",
+            address: List("urls"),
+            consumer: &[Scalar("queue")],
+            publisher: &[Scalar("key"), Fixed("exchange", "")],
+        },
+        "amqp_1" => UriFields {
+            scheme: "amqp",
+            address: List("urls"),
+            consumer: &[Scalar("source_address")],
+            publisher: &[Scalar("target_address")],
+        },
+        "nats" | "nats_jetstream" => UriFields {
+            scheme: "nats",
+            address: List("urls"),
+            consumer: &[Scalar("subject")],
+            publisher: &[Scalar("subject")],
+        },
+        "pulsar" => UriFields {
+            scheme: "pulsar",
+            address: Scalar("url"),
+            consumer: &[List("topics")],
+            publisher: &[Scalar("topic")],
+        },
+        "redis_streams" => UriFields {
+            scheme: "redis",
+            address: Scalar("url"),
+            consumer: &[List("streams")],
+            publisher: &[Scalar("stream")],
+        },
+        "redis_pubsub" => UriFields {
+            scheme: "redis",
+            address: Scalar("url"),
+            consumer: &[List("channels")],
+            publisher: &[Scalar("channel")],
+        },
+        _ => return None,
+    };
+    Some(fields)
+}
+
+/// Rewrites the two fields a URI fills into the names the component uses.
+///
+/// A field the configuration already sets by its own name wins: the URI is a
+/// shorthand for those fields, never an override of them.
+fn place_uri_fields(
+    direction: Direction,
+    connector: &str,
+    component: &mut Map<String, Value>,
+) -> Result<()> {
+    let address = component.remove("address");
+    let topic = component.remove("topic");
+    if address.is_none() && topic.is_none() {
+        return Ok(());
+    }
+    let Some(fields) = uri_fields(connector) else {
+        // Both names belong to components too -- `beanstalkd` and `socket` take
+        // an `address`, `nsq` a `topic` -- so outside the table they are the
+        // component's own fields and are left exactly where they are.
+        for (field, value) in [("address", address), ("topic", topic)] {
+            if let Some(value) = value {
+                component.insert(field.into(), value);
+            }
+        }
+        return Ok(());
+    };
+
+    if let Some(address) = address {
+        let Value::String(address) = address else {
+            bail!("`address` must be the URI of the broker `{connector}` connects to");
+        };
+        let rest = address
+            .split_once("://")
+            .map_or(address.as_str(), |(_, rest)| rest);
+        let address = Value::String(format!("{}://{rest}", fields.scheme));
+        fill(component, &fields.address, address);
+    }
+    if let Some(topic) = topic {
+        let slots = match direction {
+            Direction::Consumer => fields.consumer,
+            Direction::Publisher => fields.publisher,
+        };
+        for slot in slots {
+            fill(component, slot, topic.clone());
+        }
+    }
+    Ok(())
+}
+
+fn fill(component: &mut Map<String, Value>, slot: &Slot, value: Value) {
+    let (field, value) = match slot {
+        Slot::Scalar(field) => (*field, value),
+        Slot::List(field) => (*field, Value::Array(vec![value])),
+        Slot::Fixed(field, constant) => (*field, Value::String((*constant).to_string())),
+    };
+    component.entry(field).or_insert(value);
 }
 
 /// Removes one direction's block, checking it is an object. A connector that
@@ -343,15 +502,104 @@ mod tests {
     /// The pre-schema mapping puts the whole URI in `url`, which form B rejects
     /// and form A hands to a component that has no such field.
     #[test]
-    fn a_uri_names_the_connector_rather_than_a_url() {
-        let schema = config_schema();
-        let mapping = mq_bridge::support::config_schema::UriSchema::from_schema(&schema);
+    fn a_uri_names_the_connector_in_its_scheme() {
+        let config = from_uri("redpanda+mqtt://localhost:1883/orders?client_id=reader");
 
-        let config = mapping
-            .config_from_uri("redpanda:///mqtt?client_id=reader")
-            .unwrap();
         assert_eq!(config["connector"], "mqtt");
+        assert_eq!(config["address"], "mqtt://localhost:1883");
+        assert_eq!(config["topic"], "orders");
         assert_eq!(config["client_id"], "reader");
         assert!(config.get("url").is_none());
+    }
+
+    fn from_uri(uri: &str) -> Value {
+        let mapping = mq_bridge::support::config_schema::UriSchema::from_schema(&config_schema());
+        Value::Object(mapping.config_from_uri(uri).expect("map the uri"))
+    }
+
+    fn component(direction: Direction, uri: &str) -> Value {
+        let document: Value =
+            serde_json::from_str(&stream_config(direction, &from_uri(uri)).expect("build the end"))
+                .expect("the document is json");
+        let section = match direction {
+            Direction::Consumer => "input",
+            Direction::Publisher => "output",
+        };
+        document[section].clone()
+    }
+
+    /// The whole point of the URI form: one line that a component's own field
+    /// names would have taken four of.
+    #[test]
+    fn a_uri_reaches_a_connector_s_own_field_names_in_both_directions() {
+        let read = component(Direction::Consumer, "redpanda+mqtt://localhost:1883/orders");
+        assert_eq!(read["mqtt"]["urls"], json!(["tcp://localhost:1883"]));
+        assert_eq!(read["mqtt"]["topics"], json!(["orders"]));
+
+        let write = component(
+            Direction::Publisher,
+            "redpanda+mqtt://localhost:1883/orders",
+        );
+        assert_eq!(write["mqtt"]["urls"], json!(["tcp://localhost:1883"]));
+        assert_eq!(write["mqtt"]["topic"], json!("orders"));
+    }
+
+    /// `amqp_0_9` cannot be written in a scheme, and a sink there needs a second
+    /// field the URI only implies.
+    #[test]
+    fn a_hyphenated_scheme_reaches_the_component_whose_name_has_underscores() {
+        let write = component(
+            Direction::Publisher,
+            "redpanda+amqp-0-9://localhost:5672/jobs",
+        );
+
+        assert_eq!(write["amqp_0_9"]["urls"], json!(["amqp://localhost:5672"]));
+        assert_eq!(write["amqp_0_9"]["key"], json!("jobs"));
+        assert_eq!(write["amqp_0_9"]["exchange"], json!(""));
+
+        let read = component(
+            Direction::Consumer,
+            "redpanda+amqp-0-9://localhost:5672/jobs",
+        );
+        assert_eq!(read["amqp_0_9"]["queue"], json!("jobs"));
+        assert!(read["amqp_0_9"].get("exchange").is_none());
+    }
+
+    #[test]
+    fn a_field_given_by_its_own_name_is_what_the_uri_would_have_filled() {
+        let config = json!({
+            "connector": "mqtt",
+            "address": "mqtt://localhost:1883",
+            "topic": "orders",
+            "urls": ["tcp://elsewhere:1883"],
+        });
+        let document: Value =
+            serde_json::from_str(&stream_config(Direction::Consumer, &config).unwrap()).unwrap();
+
+        assert_eq!(
+            document["input"]["mqtt"]["urls"],
+            json!(["tcp://elsewhere:1883"])
+        );
+        assert_eq!(document["input"]["mqtt"]["topics"], json!(["orders"]));
+    }
+
+    /// `address` and `topic` are fields components have themselves --
+    /// `beanstalkd` takes an address, `nsq` a topic -- so outside the table they
+    /// are the component's own and translating them would break a configuration
+    /// that works today.
+    #[test]
+    fn a_connector_outside_the_table_keeps_both_names_as_its_own() {
+        let config = json!({ "connector": "beanstalkd", "address": "localhost:11300" });
+        let document: Value =
+            serde_json::from_str(&stream_config(Direction::Consumer, &config).unwrap()).unwrap();
+        assert_eq!(
+            document["input"]["beanstalkd"]["address"],
+            json!("localhost:11300")
+        );
+
+        let config = json!({ "connector": "nsq", "topic": "jobs", "channel": "c" });
+        let document: Value =
+            serde_json::from_str(&stream_config(Direction::Consumer, &config).unwrap()).unwrap();
+        assert_eq!(document["input"]["nsq"]["topic"], json!("jobs"));
     }
 }
