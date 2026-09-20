@@ -20,7 +20,7 @@ its job. Redpanda supplies only the I/O components.
 > ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 > source message it belongs to.
 >
-> **The acceptance gate passes against three real brokers, in CI.**
+> **The acceptance gate passes against five real brokers, in CI.**
 > `mq_bridge::plugin::conformance` ([`tests/conformance.rs`](tests/conformance.rs))
 > runs against a live beanstalkd, NATS JetStream and Redis on every push, each
 > held to what its transport actually guarantees:
@@ -29,20 +29,24 @@ its job. Redpanda supplies only the I/O components.
 > | :--- | :--- | :--- |
 > | `beanstalkd` | work queue | `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` |
 > | `nats_jetstream` | persistent stream | `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` |
+> | `amqp_0_9` | routed queue | `round_trip`, `metadata_preserved`, nack redelivery |
+> | `redis_streams` | consumer group | `round_trip`, `metadata_preserved`, nack redelivery |
+> | `mqtt` | QoS 1 topic | `round_trip`, nack redelivery |
 > | `redis_list` | work queue, no redelivery | `round_trip` |
 >
-> Two independent transports now prove redelivery for real, rather than through
-> a scripted source. A missing broker is a hard failure under CI, so the gate
-> cannot quietly degrade into a skip, and each test asserts the exact set of
-> checks its transport supports — a check that stops applying fails rather than
-> vanishing.
+> Five independent transports now prove redelivery for real, rather than through
+> a scripted source: two return a message abandoned without an acknowledgement,
+> and three return one that was explicitly rejected. A missing broker is a hard
+> failure under CI, so the gate cannot quietly degrade into a skip, and each
+> test asserts the exact set of checks its transport supports — a check that
+> stops applying fails rather than vanishing.
 >
 > **Linux and macOS both build, link and pass clippy** — the earlier link
 > failure is fixed and CI is green on both.
 >
-> **What still gates the next status, and why you should test first.** Three
-> connectors cover 6 of the 114 endpoint components, so the connector you are
-> about to use is still most likely one of the other 108. The risk is no longer
+> **What still gates the next status, and why you should test first.** Six
+> connectors cover 12 of the 114 endpoint components, so the connector you are
+> about to use is still most likely one of the other 102. The risk is no longer
 > that this does not build — it is that your connector has never been run
 > against a live broker through this boundary. Run the conformance suite against
 > yours before you rely on it. Windows is documented but never built in CI.
@@ -95,7 +99,7 @@ Redpanda Connect.
 
 ```text
 mq-bridge
-  └─ native plugin ABI 1.0
+  └─ native plugin ABI 1.1
       └─ Rust cdylib: libmq_bridge_redpanda
           ├─ mq-bridge plugin SDK (runtime, handles, panic boundary)
           ├─ CanonicalMessage / disposition translation
@@ -260,6 +264,25 @@ component's own configuration.
 } } }
 ```
 
+Most connectors name the same thing differently in each direction, and Benthos
+rejects a field the direction does not define. Put those in an `input` or
+`output` block; the one matching this endpoint is merged in and the other is
+dropped, so a single configuration describes both ends of a route.
+
+```json
+{ "custom": { "name": "redpanda", "config": {
+    "connector": "amqp_0_9",
+    "urls": ["amqp://guest:guest@localhost:5672/"],
+    "input":  { "queue": "orders" },
+    "output": { "exchange": "", "key": "orders" }
+} } }
+```
+
+A block is optional, and a field inside one overrides the same field outside it
+— which is how `mqtt` gives each direction its own `client_id`, as a broker
+disconnects the older session when two clients present the same one. A connector
+that genuinely has a field called `input` or `output` needs form B.
+
 **Form B — a Redpanda Connect configuration**, minus the end mq-bridge owns.
 This is the form to reach for if you already know Redpanda Connect.
 
@@ -285,6 +308,19 @@ a message at a time — `file` does, without a `batching` policy — is held to 
 messages in flight and loses about a fifth of its throughput to the round trip.
 Raise it for those, and see
 [Throughput](#throughput-against-a-native-pipeline) for what it recovers.
+
+### Schema and validation
+
+The plugin describes its configuration to the host as a JSON Schema (plugin ABI
+1.1), so a host can render a form for it and give a URI's values their types.
+Only the keys the two forms own are described — `connector`, `yaml`, `input` and
+`output` — because form A's remaining fields belong to whichever component
+`connector` names, and the host cannot know those.
+
+Set `MQB_PLUGIN_VALIDATE_CONFIG=1` and the host checks a route's configuration
+against that schema before the endpoint is opened. It is off by default, and the
+checks that matter here — the two forms excluding each other, stray keys beside
+`yaml` — are made by the plugin itself either way.
 
 ## Curated components
 
@@ -333,10 +369,11 @@ The aggregate `public/components/all` is RCL-tainted, so the "everything" bundle
 is not usable under Apache-2.0 terms. `public/bundle/free` does not exist in the
 published module; it is generated at build time and cannot be imported.
 
-The allowlist links **351 third-party Go modules**, none carrying an RCL header
-— see [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES), which is generated from what
-the build actually links, and the non-recursive verification command it
-documents. RCL-free is not the same as permissive: see
+The allowlist links several hundred third-party Go modules, none carrying an RCL
+header. [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) has the exact counts, the
+per-license breakdown and the non-recursive verification command; it is
+generated from what the build actually links, so it is the only place those
+numbers are maintained. RCL-free is not the same as permissive: see
 [Third-party licenses](#third-party-licenses).
 
 ## Performance
@@ -492,6 +529,14 @@ Deployment also requires **two files in the same directory**. The Rust plugin
 resolves its sibling from its own absolute path, so this is robust, but it does
 mean the artifact is not a single file.
 
+`THIRD_PARTY_NOTICES` travels with those two files. The libraries statically
+link third-party code whose licenses require their notices to accompany the
+binaries, so a deployment that copies only the two libraries is missing required
+notices. Release archives ship the notices and both license files alongside the
+libraries — keep the directory together, and if you repackage the libraries into
+an image, a formula or a package, install the notices there too. See
+[`packaging/INSTALL.md`](packaging/INSTALL.md).
+
 ### Crash isolation
 
 Every in-process option shares fate with the host. Deferred `recover` contains
@@ -558,13 +603,15 @@ the built artifact, not `go.mod`.
 
 The distributed artifact is **not** purely MIT/Apache-2.0. Every linked Redpanda
 Connect component is Apache-2.0 — that is what the allowlist guarantees — but ten
-of the 353 linked Go modules are weak copyleft. None is GPL, LGPL or AGPL, so
-nothing obliges you to open your own source.
+linked Go modules are weak copyleft. None is GPL, LGPL or AGPL, so nothing
+obliges you to open your own source, and nothing linked restricts how you may
+use the binaries. See `THIRD_PARTY_NOTICES` for the counts.
 
 Nine are MPL-2.0, which is file-level copyleft: distributing a binary that
 includes them requires making the source of *those files* available to
-recipients, under MPL-2.0, and saying where. The unmodified upstream sources at
-the pinned versions satisfy this.
+recipients, under MPL-2.0, and saying where. They are linked unmodified at the
+pinned versions, and `THIRD_PARTY_NOTICES` names a version-exact Go module proxy
+URL for each, which is what discharges the obligation.
 
 | Module | Reached through |
 | :--- | :--- |
@@ -587,11 +634,13 @@ arm, a BSD-3-Clause equivalent carrying no copyleft obligation.
 Dropping `sql`, `mqtt`, `spicedb`, `changelog` and `git` would clear the other
 eight, at the cost of five connector families, and still leave it.
 
-The Rust side is entirely permissive: MIT/Apache-2.0 throughout, plus
-`libloading` (ISC), `memchr` (Unlicense OR MIT) and `unicode-ident`
-(`(MIT OR Apache-2.0) AND Unicode-3.0` — attribution, not copyleft).
+The Rust side is entirely permissive: MIT/Apache-2.0 throughout, plus ISC,
+Unlicense OR MIT, and the ICU crates' Unicode-3.0 — attribution, not copyleft.
 
-Counts come from `THIRD_PARTY_NOTICES`; the paths were traced with
+The linked set differs per platform, so the notices are the union across every
+released platform and mark any module that is not linked on all of them.
+
+Counts and licenses come from `THIRD_PARTY_NOTICES`; the paths were traced with
 `go mod why -m <module>` from [`go-bridge/`](go-bridge/).
 [`scripts/gen-third-party-notices.py`](scripts/gen-third-party-notices.py) fails
 the build on an unrecognised license or on a bare EPL-2.0. MPL-2.0 passes

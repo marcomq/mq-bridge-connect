@@ -39,6 +39,10 @@ impl Default for RedpandaFactory {
 
 #[async_trait]
 impl CustomEndpointFactory for RedpandaFactory {
+    fn config_schema(&self) -> Option<serde_json::Value> {
+        Some(config::config_schema())
+    }
+
     async fn create_consumer(
         &self,
         route_name: &str,

@@ -74,6 +74,25 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
+      # The `go` job runs this on Linux. The linked file set is constrained per
+      # platform, so the macOS closure is a different scan and needs its own.
+      - name: No RCL source is linked (macOS closure)
+        if: matrix.os == 'macos-latest'
+        working-directory: mq-bridge-redpanda
+        run: python3 scripts/check-rcl.py
+      # The notices are generated from what is actually linked, so a go.sum
+      # bump, a components.allow edit or a Cargo.lock change can add a module,
+      # or a licence, while the committed file still describes the previous
+      # build. A diff gate rather than a regenerate-and-commit step: the point
+      # is that a human reads a new licence before it ships. The generator pins
+      # GOOS, GOARCH and the Rust targets, so one runner covers every platform.
+      - name: THIRD_PARTY_NOTICES is current
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: mq-bridge-redpanda
+        run: |
+          python3 scripts/gen-third-party-notices.py
+          git diff --exit-code THIRD_PARTY_NOTICES
+
       # Builds the Go c-shared sibling and the Rust cdylib, runs every test, then
       # the loader smoke test three times.
       - name: Build, test and smoke
@@ -81,7 +100,7 @@ jobs:
         run: sh scripts/phase0-smoke.sh
 
   conformance:
-    name: Conformance (beanstalkd, NATS JetStream, Redis)
+    name: Conformance (beanstalkd, NATS, Redis, RabbitMQ, MQTT)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     services:
@@ -121,23 +140,29 @@ jobs:
       # against. `--wait` blocks until each compose healthcheck passes.
       # beanstalkd stays a service container: mq-bridge has no compose file for
       # it, and the image publishes only `latest`, so it is pinned by digest.
-      - name: Start NATS and Redis
+      - name: Start NATS, Redis, RabbitMQ and Mosquitto
         run: |
-          docker compose -f mq-bridge/tests/integration/docker-compose/nats.yml up -d --wait
-          docker compose -f mq-bridge/tests/integration/docker-compose/redis.yml up -d --wait
+          for broker in nats redis amqp mqtt; do
+            docker compose -f "mq-bridge/tests/integration/docker-compose/$broker.yml" up -d --wait
+          done
       - name: Build the Go sibling
         working-directory: mq-bridge-redpanda/go-bridge
         run: |
           mkdir -p ../target/debug
           go build -buildmode=c-shared -o ../target/debug/libmq_bridge_redpanda_go.so .
-      # The acceptance gate, across three transports: a work queue that
-      # redelivers, a persistent stream that redelivers, and a work queue that
-      # cannot. Each test asserts the exact set of checks its transport
-      # supports, so a check that stops applying fails rather than vanishing.
+      # The acceptance gate, across six transports: work queues that redeliver
+      # and one that cannot, a persistent stream, a routed queue, a consumer
+      # group and a QoS 1 topic. Each test asserts the exact set of checks its
+      # transport supports, so a check that stops applying fails rather than
+      # vanishing.
       - name: Run the conformance suite
         working-directory: mq-bridge-redpanda
         env:
           MQ_BRIDGE_REDPANDA_BEANSTALKD: 127.0.0.1:11300
           MQ_BRIDGE_REDPANDA_NATS: 127.0.0.1:4222
           MQ_BRIDGE_REDPANDA_REDIS: 127.0.0.1:6379
-        run: cargo test --locked --test conformance -- --nocapture
+          MQ_BRIDGE_REDPANDA_AMQP: 127.0.0.1:5672
+          MQ_BRIDGE_REDPANDA_MQTT: 127.0.0.1:1883
+        # Serially: `redis_list` and `redis_streams` share a broker, and the
+        # suite's checks assume nothing else is draining the transport.
+        run: cargo test --locked --test conformance -- --nocapture --test-threads 1

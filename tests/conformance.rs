@@ -1,27 +1,36 @@
 //! The acceptance gate: mq-bridge's own endpoint conformance suite, run against
 //! real brokers.
 //!
-//! The suite shares one configuration between the input and the output, so it
-//! needs a connector whose two directions take the same fields. That rules out
-//! the `yaml` form entirely — it names the section mq-bridge owns, which is the
-//! opposite one in each direction — and it rules out every connector whose two
-//! directions disagree: `mqtt` reads `topics` and writes `topic`, `amqp_0_9`
-//! reads a `queue` and writes to an `exchange`, `redis_streams` reads `streams`
-//! and writes `stream`. Those need a direction-aware configuration form, not a
-//! different test.
+//! The suite shares one configuration between the input and the output. That
+//! rules out the `yaml` form entirely — it names the section mq-bridge owns,
+//! which is the opposite one in each direction. Connectors whose two
+//! directions disagree on field names use the `input`/`output` blocks of form
+//! A instead: `mqtt` reads `topics` and writes `topic`, `amqp_0_9` reads a
+//! `queue` and writes to an `exchange`, `redis_streams` reads `streams` and
+//! writes `stream`.
 //!
 //! Each connector is held to what its transport actually guarantees:
 //!
 //! | Connector | Transport | Redelivery | Metadata |
 //! | :-- | :-- | :-- | :-- |
-//! | `beanstalkd` | work queue | yes — a released job returns to the ready queue | no — a job is a body |
-//! | `nats_jetstream` | persistent stream | yes — on nack, and on `ack_wait` expiry | no — see below |
-//! | `redis_list` | work queue | no — the ack is a no-op; the pop already removed it | no — body only |
+//! | `beanstalkd` | work queue | full — TTR returns an abandoned job | no — a job is a body |
+//! | `nats_jetstream` | persistent stream | full — on nack, and on `ack_wait` expiry | no — see below |
+//! | `redis_list` | work queue | none — the pop already removed it | no — body only |
+//! | `amqp_0_9` | queue | nack only — no acknowledgement deadline | yes |
+//! | `redis_streams` | consumer group | nack only — a pending entry needs an explicit claim | yes |
+//! | `mqtt` | QoS 1 topic | nack only — replayed in process | no — v3.1.1 has no user properties |
+//!
+//! "Full" means both redelivery checks; "nack only" means a rejected message
+//! comes back but a batch abandoned without a commit does not, because the
+//! transport has no acknowledgement deadline to expire. `ConformanceOptions`
+//! turns both checks on together, so those three run the suite without them
+//! and are held to `nack_is_redelivered` below instead.
 //!
 //! Neither NATS connector can carry metadata here: the output's `metadata`
 //! field is an *include* filter that writes nothing until configured, and the
 //! one shared config cannot configure it, because the input rejects a
-//! `metadata` field it does not define.
+//! `metadata` field it does not define. `amqp_0_9` and `redis_streams` use an
+//! *exclude* filter, which carries everything by default.
 //!
 //! Core `nats` is deliberately absent. It is fire-and-forget pub/sub with no
 //! buffering, so anything published before the subscription reaches the server
@@ -35,8 +44,9 @@
 use std::time::Duration;
 
 use mq_bridge::plugin::conformance::{self, ConformanceOptions};
-use mq_bridge::traits::CustomEndpointFactory;
-use serde_json::json;
+use mq_bridge::traits::{CustomEndpointFactory, MessageDisposition};
+use mq_bridge::{CanonicalMessage, SentBatch};
+use serde_json::{json, Value};
 
 mod common;
 use common::factory;
@@ -117,6 +127,110 @@ async fn the_conformance_suite_passes_against_redis_list() {
     run(options, &["round_trip"]).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_conformance_suite_passes_against_amqp_0_9() {
+    let Some(address) = address("MQ_BRIDGE_REDPANDA_AMQP") else {
+        return;
+    };
+    // The two directions disagree on every routing field, which is what the
+    // per-direction blocks are for: the input consumes a queue, the output
+    // publishes to an exchange. The default exchange routes by name, so a key
+    // equal to the queue lands the message in it.
+    let queue = format!("mqb-conformance-{}", run_id());
+    declare_queue(&address, &queue).await;
+    let config = json!({
+            "connector": "amqp_0_9",
+            "urls": [format!("amqp://guest:guest@{address}/")],
+            "input": {
+                "queue": queue,
+                "queue_declare": { "enabled": true, "durable": true },
+            },
+            "output": { "exchange": "", "key": queue },
+    });
+    let mut options = ConformanceOptions::new("redpanda-conformance-amqp-0-9", config.clone());
+    options.expect_redelivery = false;
+
+    run(options, &["round_trip", "metadata_preserved"]).await;
+    nack_is_redelivered("redpanda-amqp-0-9-nack", &config).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_conformance_suite_passes_against_redis_streams() {
+    let Some(address) = address("MQ_BRIDGE_REDPANDA_REDIS") else {
+        return;
+    };
+    // `streams` reads a list and `stream` writes one name, so the shared form
+    // cannot express this connector at all without the per-direction blocks.
+    let stream = format!("mqb-conformance-{}", run_id());
+    let config = json!({
+            "connector": "redis_streams",
+            "url": format!("redis://{address}"),
+            "body_key": "body",
+            "input": {
+                "streams": [stream],
+                "consumer_group": "mqb-conformance",
+                "create_streams": true,
+                "start_from_oldest": true,
+            },
+            "output": { "stream": stream },
+    });
+    let mut options = ConformanceOptions::new("redpanda-conformance-redis-streams", config.clone());
+    options.expect_redelivery = false;
+
+    run(options, &["round_trip", "metadata_preserved"]).await;
+    nack_is_redelivered("redpanda-redis-streams-nack", &config).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_conformance_suite_passes_against_mqtt() {
+    let Some(address) = address("MQ_BRIDGE_REDPANDA_MQTT") else {
+        return;
+    };
+    // A broker disconnects the older session when a second client presents the
+    // same id, so the two ends need different ones. That is a per-direction
+    // field whose name is shared, which the blocks handle as readily as the
+    // `topics`/`topic` split.
+    let id = run_id();
+    let topic = format!("mqb/conformance/{id}");
+    let config = json!({
+            "connector": "mqtt",
+            "urls": [format!("tcp://{address}")],
+            "qos": 1,
+            "input": {
+                "topics": [topic],
+                "client_id": format!("mqb-conformance-in-{id}"),
+                "clean_session": false,
+            },
+            "output": {
+                "topic": topic,
+                "client_id": format!("mqb-conformance-out-{id}"),
+            },
+    });
+    // Benthos connects lazily, so without this the publisher reaches the broker
+    // before the subscription does and the first messages are dropped. A QoS 1
+    // session opened with `clean_session: false` makes the broker hold the
+    // subscription, and queue messages, while the client is away.
+    subscribe_first(&config).await;
+
+    let mut options = ConformanceOptions::new("redpanda-conformance-mqtt", config.clone());
+    // MQTT carries no user properties under v3.1.1, which is what this client
+    // speaks, so a payload is all that crosses.
+    options.expect_metadata = false;
+    options.expect_redelivery = false;
+
+    run(options, &["round_trip"]).await;
+    nack_is_redelivered("redpanda-mqtt-nack", &config).await;
+}
+
+/// A per-run suffix, so a broker that outlives the run cannot replay an earlier
+/// one into it.
+fn run_id() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is before the epoch")
+        .as_millis()
+}
+
 /// Creates the JetStream stream the shared config cannot ask for: `stream` and
 /// `create_stream` are input-only fields, so they go through the `yaml` form,
 /// which is direction-specific. Benthos connects lazily, so this has to read
@@ -130,6 +244,128 @@ async fn create_stream(address: &str, stream: &str, subject: &str) {
         .create_consumer("conformance-bootstrap", &json!({ "yaml": yaml }))
         .await
         .unwrap_or_else(|error| panic!("could not open {stream}: {error:#}"));
+    consumer.set_exit_on_empty(true);
+    let _ = tokio::time::timeout(Duration::from_secs(10), consumer.receive_batch(1)).await;
+    consumer
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("could not close the bootstrap consumer: {error:#}"));
+}
+
+/// A nacked message comes back.
+///
+/// The shared suite turns both redelivery checks on together, and these three
+/// transports guarantee only this half. None has an acknowledgement deadline,
+/// so a batch abandoned without a commit stays checked out until the consumer
+/// disconnects, where beanstalkd's TTR and JetStream's `ack_wait` hand it back
+/// on a timer. Rejecting the message explicitly returns it on all three.
+async fn nack_is_redelivered(route: &str, config: &Value) {
+    let factory = factory();
+    let mut consumer = factory
+        .create_consumer(route, config)
+        .await
+        .unwrap_or_else(|error| panic!("{route}: could not open the consumer: {error:#}"));
+    let publisher = factory
+        .create_publisher(route, config)
+        .await
+        .unwrap_or_else(|error| panic!("{route}: could not open the publisher: {error:#}"));
+
+    let payload = format!("nack-redelivery-{}", run_id());
+    match publisher
+        .send_batch(vec![CanonicalMessage::from(payload.as_str())])
+        .await
+    {
+        Ok(SentBatch::Ack) => {}
+        Ok(SentBatch::Partial { failed, .. }) if failed.is_empty() => {}
+        other => panic!("{route}: publishing failed: {other:?}"),
+    }
+    publisher
+        .flush()
+        .await
+        .unwrap_or_else(|error| panic!("{route}: flushing failed: {error:#}"));
+
+    let first = take_one(route, &mut *consumer, &payload, MessageDisposition::Nack).await;
+    assert_eq!(first, payload, "{route}: received an unexpected message");
+    let second = take_one(route, &mut *consumer, &payload, MessageDisposition::Ack).await;
+    assert_eq!(
+        second, payload,
+        "{route}: a nacked message was not redelivered"
+    );
+
+    consumer
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("{route}: could not close the consumer: {error:#}"));
+}
+
+/// Receives until `payload` arrives, settling every batch with `disposition`.
+/// Anything else on the transport is acknowledged so it cannot mask the answer.
+async fn take_one(
+    route: &str,
+    consumer: &mut dyn mq_bridge::traits::MessageConsumer,
+    payload: &str,
+    disposition: MessageDisposition,
+) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        let batch = match consumer.receive_batch(1).await {
+            Ok(batch) => batch,
+            Err(error) => panic!("{route}: receive_batch failed: {error:#}"),
+        };
+        let found = batch
+            .messages
+            .iter()
+            .find(|message| message.get_payload_str() == payload)
+            .map(|message| message.get_payload_str().to_string());
+        let settle = if found.is_some() {
+            disposition.clone()
+        } else {
+            MessageDisposition::Ack
+        };
+        let count = batch.messages.len();
+        (batch.commit)(vec![settle; count])
+            .await
+            .unwrap_or_else(|error| panic!("{route}: commit failed: {error:#}"));
+        if let Some(found) = found {
+            return found;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("{route}: `{payload}` never arrived");
+}
+
+/// Registers the MQTT subscription before anything publishes to the topic, by
+/// opening the session once and letting it close. The broker keeps a
+/// `clean_session: false` session, so the suite's own consumer resumes it.
+async fn subscribe_first(config: &Value) {
+    let mut consumer = factory()
+        .create_consumer("conformance-bootstrap", config)
+        .await
+        .unwrap_or_else(|error| panic!("could not open the MQTT session: {error:#}"));
+    consumer.set_exit_on_empty(true);
+    let _ = tokio::time::timeout(Duration::from_secs(10), consumer.receive_batch(1)).await;
+    consumer
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("could not close the bootstrap consumer: {error:#}"));
+}
+
+/// Declares the queue before anything publishes to it. Benthos connects lazily,
+/// and the default exchange drops a message with no matching queue without
+/// erroring, so a first consumer has to have run to completion.
+async fn declare_queue(address: &str, queue: &str) {
+    let mut consumer = factory()
+        .create_consumer(
+            "conformance-bootstrap",
+            &json!({
+                "connector": "amqp_0_9",
+                "urls": [format!("amqp://guest:guest@{address}/")],
+                "queue": queue,
+                "queue_declare": { "enabled": true, "durable": true },
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("could not declare {queue}: {error:#}"));
     consumer.set_exit_on_empty(true);
     let _ = tokio::time::timeout(Duration::from_secs(10), consumer.receive_batch(1)).await;
     consumer

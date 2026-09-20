@@ -11,18 +11,33 @@ license. mq-bridge-redpanda's own source is licensed MIT OR Apache-2.0; see
 LICENSE-MIT and LICENSE-APACHE. Choosing an arm of that dual license covers
 this project's own code only — everything listed below keeps its own terms.
 
+This file is self-contained. Every license text referenced by an entry is
+reproduced in the appendix at the end; nothing here requires a toolchain, a
+module cache or a network connection to read.
+
 Scope
 -----
 
 The audit unit is the *built artifact*, not go.mod or Cargo.toml. Go build
 tags and Cargo features change the linked set, so this file is generated from
 `go list -deps` over go-bridge and `cargo metadata` over the plugin crate, at
-the versions pinned in go.sum and Cargo.lock. Regenerate it with:
+the versions pinned in go.sum and Cargo.lock.
+
+The linked set also changes with the platform, so this file is the *union*
+across every platform released, and an entry that is not linked everywhere says
+so on its own line:
+
+{platform_scope}
+
+Windows is not built and not covered here; a Windows artifact needs its own
+run with that platform added to the generator. Regenerate with:
 
     python3 scripts/gen-third-party-notices.py
 
 Anything that changes the component allowlist in go-bridge/components.allow,
-the Cargo feature set, or a pinned version invalidates this file.
+the Cargo feature set, or a pinned version invalidates this file. CI
+regenerates it and fails on a diff, so a bump that adds a module or a license
+cannot ship until a human has read the new text.
 
 The Go sibling is built with an explicit component allowlist, not the
 `public/bundle/free` aggregate. That is a licensing decision as much as a size
@@ -52,28 +67,37 @@ Mozilla Public License 2.0 obligations
 --------------------------------------
 
 Some linked Go modules are MPL-2.0 (marked below). MPL-2.0 is file-level
-copyleft: distributing a binary that includes them requires making the source
-of *those files* available to recipients, under MPL-2.0, and saying where. The
-unmodified upstream sources at the pinned versions satisfy this. If you fork
-or patch an MPL-2.0 module, you must publish the modified files.
+copyleft: distributing a binary that includes them requires making the Source
+Code Form of *those files* available to recipients under MPL-2.0, and telling
+recipients where to obtain it (MPL-2.0 §3.2).
+
+The modules are linked unmodified at the versions pinned in go.sum. Their
+Source Code Form is available at the URLs below, each of which is the Go module
+proxy's immutable, version-exact source zip for that module:
+
+{mpl_sources}
+
+If you fork or patch an MPL-2.0 module, you must publish the modified files
+under MPL-2.0 and amend the locations above to point at your modified source.
 
 Eclipse dual licensing
 ----------------------
 
 github.com/eclipse/paho.mqtt.golang (the `mqtt` connector) is offered under
-either EPL-2.0 or EDL-1.0. This distribution relies on the EDL-1.0 arm, which is
-a BSD-3-Clause equivalent and carries no copyleft obligation. Its source tree
-ships both texts as edl-v10 and epl-v20.
+either EPL-2.0 or EDL-1.0. This distribution elects the EDL-1.0 arm, which is a
+BSD-3-Clause equivalent and carries no copyleft obligation. Both texts are
+reproduced in the appendix, as upstream ships both.
 
 Full license texts
 ------------------
 
-Apache-2.0 and MIT appear in this repository as LICENSE-APACHE and LICENSE-MIT.
-For BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, EPL-2.0/EDL-1.0 and Unicode-3.0,
-and for the exact
-copyright holders of every entry, see the LICENSE file inside each dependency's
-own source tree; the Go module cache (`go env GOMODCACHE`) and the Cargo
-registry checkout retain them verbatim.
+Every license text is in the appendix at the end of this file, cited from each
+entry by tag (`[L01]`). Texts that are byte-identical apart from their
+copyright notice appear once; each entry carries its own notice on its own
+line, so no attribution is lost to the grouping.
+
+mq-bridge-redpanda's own dual license is in this repository as LICENSE-APACHE
+and LICENSE-MIT, and ships beside the libraries in every release artifact.
 
 
 ================================================================================
@@ -93,10 +117,29 @@ PART B — Rust cdylib (libmq_bridge_redpanda)
 
 {rust_count} Rust crates are linked, using each crate's declared SPDX
 expression. Where an expression offers a choice (`MIT OR Apache-2.0`), this
-distribution takes no position; recipients may select either arm.
+distribution takes no position; recipients may select either arm, and the text
+of each arm is cited.
 
 `mq-bridge` itself is listed because the plugin links its SDK.
 
 {rust_summary}
 
 {rust_table}
+
+
+================================================================================
+APPENDIX — FULL LICENSE TEXTS
+================================================================================
+
+Each distinct license text linked into this distribution is reproduced once
+below, grouped by license and tagged as Parts A and B cite it. Each is quoted
+verbatim from the dependency named in its heading; entries that share a text
+differ from it only in their copyright notice, which is printed with each entry
+above.
+
+Several groups hold more than one text. That is not duplication: a project may
+append its own NOTICE, attribution or bundled-dependency section to the
+standard text, which makes that file a distinct document this distribution is
+obliged to carry in full.
+
+{license_texts}

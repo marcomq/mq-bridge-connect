@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build an unpublished archive for (e.g. v0.1.0)
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # A release archive is a distribution, which is what the licence obligations
+  # attach to. Regenerating the notices here and failing on a diff means a
+  # release cannot ship a file that describes a previous build.
+  notices:
+    name: Notices are current
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: mq-bridge-redpanda
+      # `mq-bridge` is a path dependency at `../mq-bridge`; without it
+      # `cargo metadata` cannot resolve the Rust half of the notices.
+      - name: Check out the mq-bridge host
+        uses: actions/checkout@v7
+        with:
+          repository: marcomq/mq-bridge
+          path: mq-bridge
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+      - uses: dtolnay/rust-toolchain@stable
+      - name: No RCL source is linked
+        working-directory: mq-bridge-redpanda
+        run: python3 scripts/check-rcl.py
+      - name: THIRD_PARTY_NOTICES is current
+        working-directory: mq-bridge-redpanda
+        run: |
+          python3 scripts/gen-third-party-notices.py
+          git diff --exit-code THIRD_PARTY_NOTICES
+
+  archive:
+    name: Archive (${{ matrix.os }})
+    needs: notices
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            extension: so
+          - os: macos-latest
+            target: macos-aarch64
+            extension: dylib
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: mq-bridge-redpanda
+      - name: Check out the mq-bridge host
+        uses: actions/checkout@v7
+        with:
+          repository: marcomq/mq-bridge
+          path: mq-bridge
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mq-bridge-redpanda
+
+      - name: Build both libraries
+        working-directory: mq-bridge-redpanda
+        run: |
+          mkdir -p target/release
+          (cd go-bridge && go build -buildmode=c-shared \
+              -o ../target/release/libmq_bridge_redpanda_go.${{ matrix.extension }} .)
+          cargo build --locked --release --lib
+
+      # The two libraries and the notices travel as one unit. Anything that
+      # separates them turns a compliant build into a non-compliant
+      # distribution, so they are staged together and verified below.
+      - name: Stage the archive
+        working-directory: mq-bridge-redpanda
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          name="mq-bridge-redpanda-${version}-${{ matrix.target }}"
+          echo "ARCHIVE_NAME=${name}" >> "$GITHUB_ENV"
+          mkdir -p "stage/${name}"
+          cp "target/release/libmq_bridge_redpanda.${{ matrix.extension }}" "stage/${name}/"
+          cp "target/release/libmq_bridge_redpanda_go.${{ matrix.extension }}" "stage/${name}/"
+          cp THIRD_PARTY_NOTICES LICENSE-MIT LICENSE-APACHE "stage/${name}/"
+          cp packaging/INSTALL.md "stage/${name}/"
+
+      # A release that drops the notices is the failure mode this whole effort
+      # is about, so it fails the build rather than being caught after upload.
+      - name: The archive carries its notices
+        working-directory: mq-bridge-redpanda
+        run: |
+          missing=0
+          for required in \
+              "libmq_bridge_redpanda.${{ matrix.extension }}" \
+              "libmq_bridge_redpanda_go.${{ matrix.extension }}" \
+              THIRD_PARTY_NOTICES LICENSE-MIT LICENSE-APACHE INSTALL.md; do
+            if [ ! -s "stage/${ARCHIVE_NAME}/${required}" ]; then
+              echo "release archive is missing ${required}" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Pack
+        working-directory: mq-bridge-redpanda/stage
+        run: |
+          tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: |
+            mq-bridge-redpanda/stage/${{ env.ARCHIVE_NAME }}.tar.gz
+            mq-bridge-redpanda/stage/${{ env.ARCHIVE_NAME }}.tar.gz.sha256
+
+  publish:
+    name: Publish the GitHub release
+    needs: archive
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sha256
+          body: |
+            Each archive contains both libraries, `THIRD_PARTY_NOTICES`,
+            `LICENSE-MIT`, `LICENSE-APACHE` and `INSTALL.md`. The notices file
+            is self-contained: it carries the full text of every licence linked
+            into these binaries, and the source locations for the MPL-2.0
+            modules. Keep the whole directory together when you deploy it.
