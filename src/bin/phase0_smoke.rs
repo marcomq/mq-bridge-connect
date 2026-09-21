@@ -62,10 +62,21 @@ fn main() -> anyhow::Result<()> {
     if !(info.supports_consumer && info.supports_publisher) {
         bail!("the Phase 0 plugin must advertise both future endpoint directions");
     }
+    if info.abi_major != 1 || info.abi_minor < 1 {
+        bail!(
+            "plugin exports ABI {}.{}, expected 1.1 or a later 1.x",
+            info.abi_major,
+            info.abi_minor
+        );
+    }
+    // The schema slot only exists from ABI 1.1, so this proves the host read it.
+    if info.endpoint_schema().is_none() {
+        bail!("plugin exported no configuration schema through ABI 1.1");
+    }
 
     println!(
-        "phase-0 smoke passed: {DIRECT_LOAD_CYCLES} Go reloads, panic recovery, Rust plugin {}",
-        info.version
+        "phase-0 smoke passed: {DIRECT_LOAD_CYCLES} Go reloads, panic recovery, Rust plugin {} (ABI {}.{})",
+        info.version, info.abi_major, info.abi_minor
     );
     Ok(())
 }

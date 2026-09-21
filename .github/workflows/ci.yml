@@ -53,12 +53,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: mq-bridge-redpanda
-      # `mq-bridge` is a path dependency at `../mq-bridge`.
-      - name: Check out the mq-bridge host
-        uses: actions/checkout@v7
-        with:
-          repository: marcomq/mq-bridge
-          path: mq-bridge
       - uses: actions/setup-go@v7
         with:
           go-version-file: mq-bridge-redpanda/go-bridge/go.mod

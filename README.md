@@ -160,7 +160,7 @@ The requirements below are for **building** it, not for using it.
 | :--- | :--- |
 | Rust | 1.85+ |
 | Go | 1.26.6+ (cgo enabled — needs a working C toolchain) |
-| `mq-bridge` | checked out at `../mq-bridge` (path dependency) |
+| `mq-bridge` | `0.4.13` from crates.io (plugin ABI 1.1) |
 
 Pinned upstreams: Benthos `v4.78.0`, Redpanda Connect `v4.107.2`.
 
@@ -543,6 +543,37 @@ in-flight slot is parked, instead of waiting out `batchLinger` for messages that
 cannot arrive until mq-bridge commits; that is worth **14×** to any source
 emitting one message per batch, `file` among them.
 `TestASourceOfSingleMessageBatchesDoesNotWaitOutTheLinger` holds the line.
+
+### Against mq-bridge's native endpoints
+
+[`scripts/equivalence.sh`](scripts/equivalence.sh) holds the `redpanda` endpoint
+to the endpoint mq-bridge ships for the same broker, through the `mqb` CLI. For
+NATS JetStream, RabbitMQ (AMQP 0.9) and Redis Streams it fills a fresh queue with
+one implementation and drains it with the other, in all four pairings:
+
+```sh
+sh scripts/equivalence.sh     # needs mqb 0.4.13+, jq, and mq-bridge's nats/amqp/redis compose brokers
+```
+
+**The results are the same.** Every pairing delivers exactly the messages sent,
+payloads and metadata alike, so either implementation can read what the other
+wrote. MQTT is left out: a topic keeps nothing for a subscriber that has not
+connected yet, so it cannot be filled first and drained afterwards.
+
+**Publishing performs on par with the native endpoints.** Draining through the
+plugin is slower. On NATS the gap is modest. On AMQP and Redis Streams it is
+large with the connectors' defaults, which fetch a handful of messages at a
+time: `amqp_0_9` defaults to `prefetch_count: 10` and `redis_streams` to
+`limit: 10`. Raising them closes most of the gap:
+
+```yaml
+config: { connector: amqp_0_9, prefetch_count: 1000, … }
+config: { connector: redis_streams, limit: 500, … }
+```
+
+`mqb` 0.4.13 leaves a headless run up after its `exit_on_empty` routes
+complete, so the script stops each route once it has finished, and the times
+include process start and connection.
 
 ## Known issues
 
