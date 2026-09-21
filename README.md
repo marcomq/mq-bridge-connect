@@ -12,6 +12,13 @@ endpoints **without** running a Redpanda Connect pipeline. `mq-bridge` stays the
 engine — routing, batching, middleware, retries, DLQ and transformations remain
 its job. Redpanda supplies only the I/O components.
 
+> **Unofficial.** This is an independent community project. It is not affiliated
+> with, endorsed by or supported by Redpanda Data, Inc. or the Benthos project.
+> Please do not report issues with this plugin to them if this just affects the mq-bridge usage. Use this repository's
+> [issue tracker](https://github.com/marcomq/mq-bridge-redpanda/issues) instead.
+> "Redpanda" and "Benthos" are trademarks of their respective owners and are
+> used here only to describe compatibility.
+
 > ## ⚠️ Status: early — perform your own testing before you deploy
 >
 > **Messages cross the boundary in both directions**, at 1.83M msg/s in and

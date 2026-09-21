@@ -1,5 +1,8 @@
 # Installing the mq-bridge Redpanda Connect plugin
 
+This is an unofficial plugin. It is not affiliated with, endorsed by or
+supported by Redpanda Data, Inc. or the Benthos project.
+
 This directory is one unit. It contains:
 
 | File | What it is |
