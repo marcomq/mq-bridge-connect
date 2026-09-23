@@ -1,6 +1,6 @@
-# mq-bridge-redpanda
+# mq-bridge-connect
 
-[![CI](https://github.com/marcomq/mq-bridge-redpanda/actions/workflows/ci.yml/badge.svg)](https://github.com/marcomq/mq-bridge-redpanda/actions/workflows/ci.yml)
+[![CI](https://github.com/marcomq/mq-bridge-connect/actions/workflows/ci.yml/badge.svg)](https://github.com/marcomq/mq-bridge-connect/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ![Status](https://img.shields.io/badge/status-early%20(broker%20verified%20in%20CI)-orange)
 
@@ -15,15 +15,15 @@ its job. Redpanda supplies only the I/O components.
 > **Unofficial.** This is an independent community project. It is not affiliated
 > with, endorsed by or supported by Redpanda Data, Inc. or the Benthos project.
 > Please do not report issues with this plugin to them if this just affects the mq-bridge usage. Use this repository's
-> [issue tracker](https://github.com/marcomq/mq-bridge-redpanda/issues) instead.
+> [issue tracker](https://github.com/marcomq/mq-bridge-connect/issues) instead.
 > "Redpanda" and "Benthos" are trademarks of their respective owners and are
 > used here only to describe compatibility.
 
 > ## ⚠️ Status: early — perform your own testing before you deploy
 >
 > **Messages cross the boundary in both directions**, at 1.83M msg/s in and
-> 3.66M out. A `redpanda` input consumes through a Redpanda Connect connector and
-> a `redpanda` output publishes through one; payloads and metadata survive both
+> 3.66M out. A `connect` input consumes through a Redpanda Connect connector and
+> a `connect` output publishes through one; payloads and metadata survive both
 > ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 > source message it belongs to.
 >
@@ -87,7 +87,7 @@ never had it.
 mq-bridge moves **694 773 msg/s** against Redpanda Connect's **238 851 msg/s**
 for the same 200 000 lines, and the boundary into a Redpanda sink is free
 (`mq-bridge → file` measured 182 165 msg/s against 171 996 native). So a
-`file → <redpanda sink>` route through mq-bridge beats the same route inside
+`file → <connect sink>` route through mq-bridge beats the same route inside
 Redpanda Connect whenever the sink can absorb more than 239k/s; when the sink is
 the bottleneck it is a wash, never a loss. That is **one connector on one
 workload, measured with two different harnesses** — a reason to measure your own
@@ -107,11 +107,11 @@ Redpanda Connect.
 ```text
 mq-bridge
   └─ native plugin ABI 1.1
-      └─ Rust cdylib: libmq_bridge_redpanda
+      └─ Rust cdylib: libmq_bridge_connect
           ├─ mq-bridge plugin SDK (runtime, handles, panic boundary)
           ├─ CanonicalMessage / disposition translation
           └─ private batch C ABI, resolved at runtime
-              └─ Go c-shared sibling: libmq_bridge_redpanda_go
+              └─ Go c-shared sibling: libmq_bridge_connect_go
                   ├─ Benthos StreamBuilder, one stream per endpoint
                   ├─ batch parking with per-message dispositions
                   └─ curated Redpanda component imports
@@ -120,7 +120,7 @@ mq-bridge
 Two artifacts ship together in one directory. The Rust plugin locates the Go
 sibling **relative to its own absolute path** ([`src/sibling.rs`](src/sibling.rs)),
 never via the working directory or the system library search path.
-`MQ_BRIDGE_REDPANDA_GO_LIBRARY` overrides that with an absolute path, for tests.
+`MQ_BRIDGE_CONNECT_GO_LIBRARY` overrides that with an absolute path, for tests.
 
 The private Rust↔Go ABI ([`go-bridge/bridge.h`](go-bridge/bridge.h)) is versioned
 independently of mq-bridge's public plugin ABI: a `struct_size` plus
@@ -143,12 +143,12 @@ Rust side and a small private ABI in between.
 Prebuilt for macOS arm64, Linux x86_64/arm64 and Windows x86_64:
 
 ```console
-brew install marcomq/tap/mq-bridge-redpanda
-conda install -c marcomq mq-bridge-redpanda
+brew install marcomq/tap/mq-bridge-connect
+conda install -c marcomq mq-bridge-connect
 ```
 
 Either puts both libraries, and the third-party notices, where mq-bridge looks
-for them; a route can then name the `redpanda` endpoint with no further setup.
+for them; a route can then name the `connect` endpoint with no further setup.
 The release archives are the same files for a manual install — see
 [packaging/INSTALL.md](packaging/INSTALL.md).
 
@@ -211,9 +211,9 @@ docker run --rm -d -p 11300:11300 schickling/beanstalkd
 docker compose -f ../mq-bridge/tests/integration/docker-compose/nats.yml up -d --wait
 docker compose -f ../mq-bridge/tests/integration/docker-compose/redis.yml up -d --wait
 
-MQ_BRIDGE_REDPANDA_BEANSTALKD=127.0.0.1:11300 \
-MQ_BRIDGE_REDPANDA_NATS=127.0.0.1:4222 \
-MQ_BRIDGE_REDPANDA_REDIS=127.0.0.1:6379 \
+MQ_BRIDGE_CONNECT_BEANSTALKD=127.0.0.1:11300 \
+MQ_BRIDGE_CONNECT_NATS=127.0.0.1:4222 \
+MQ_BRIDGE_CONNECT_REDIS=127.0.0.1:6379 \
     cargo test --test conformance -- --nocapture
 ```
 
@@ -242,9 +242,9 @@ sibling the way the cdylib does. Point at it explicitly:
 ```sh
 cargo build --lib
 (cd go-bridge && go build -buildmode=c-shared \
-    -o ../target/debug/libmq_bridge_redpanda_go.dylib .)   # .so on Linux
+    -o ../target/debug/libmq_bridge_connect_go.dylib .)   # .so on Linux
 
-MQ_BRIDGE_REDPANDA_GO_LIBRARY=$PWD/target/debug/libmq_bridge_redpanda_go.dylib \
+MQ_BRIDGE_CONNECT_GO_LIBRARY=$PWD/target/debug/libmq_bridge_connect_go.dylib \
     cargo run --example quickstart
 ```
 
@@ -268,8 +268,8 @@ identical pipeline that never leaves Go — see
 ## Configuring an endpoint
 
 mq-bridge owns one end of every stream and Redpanda Connect owns the other: a
-`redpanda` **input** is a Benthos stream whose output is mq-bridge, and a
-`redpanda` **output** is one whose input is mq-bridge. A configuration that also
+`connect` **input** is a Benthos stream whose output is mq-bridge, and a
+`connect` **output** is one whose input is mq-bridge. A configuration that also
 declares the end mq-bridge owns is rejected, rather than quietly bypassing the
 route's retries, DLQ and observability.
 
@@ -280,7 +280,7 @@ they cannot drift apart ([`src/config.rs`](src/config.rs)).
 component's own configuration.
 
 ```json
-{ "custom": { "name": "redpanda", "config": {
+{ "custom": { "name": "connect", "config": {
     "connector": "mqtt",
     "urls": ["tcp://localhost:1883"],
     "topics": ["orders"]
@@ -293,7 +293,7 @@ rejects a field the direction does not define. Put those in an `input` or
 dropped, so a single configuration describes both ends of a route.
 
 ```json
-{ "custom": { "name": "redpanda", "config": {
+{ "custom": { "name": "connect", "config": {
     "connector": "amqp_0_9",
     "urls": ["amqp://guest:guest@localhost:5672/"],
     "input":  { "queue": "orders" },
@@ -311,7 +311,7 @@ that genuinely has a field called `input` or `output` needs form B.
 is read as that component's:
 
 ```sh
-mq-bridge --input 'redpanda+mqtt://localhost:1883/orders' --output 'file:///tmp/out.jsonl'
+mq-bridge --input 'connect+mqtt://localhost:1883/orders' --output 'file:///tmp/out.jsonl'
 ```
 
 That is the same configuration as the first example above. The authority is the
@@ -336,14 +336,14 @@ configuration that works today.
 
 A URI scheme may hold only letters, digits, `+`, `-` and `.`
 ([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.1)), so a component
-whose name contains `_` is spelled with `-`: `redpanda+amqp-0-9://`. No
+whose name contains `_` is spelled with `-`: `connect+amqp-0-9://`. No
 component name contains a `-`, which is what makes the way back unambiguous.
 
 **Form B — a Redpanda Connect configuration**, minus the end mq-bridge owns.
 This is the form to reach for if you already know Redpanda Connect.
 
 ```json
-{ "custom": { "name": "redpanda", "config": { "yaml":
+{ "custom": { "name": "connect", "config": { "yaml":
     "input:\n  mqtt:\n    urls: [tcp://localhost:1883]\n    topics: [orders]\npipeline:\n  processors:\n    - mapping: 'meta ingested_at = now()'\n"
 } } }
 ```
@@ -546,7 +546,7 @@ emitting one message per batch, `file` among them.
 
 ### Against mq-bridge's native endpoints
 
-[`scripts/equivalence.sh`](scripts/equivalence.sh) holds the `redpanda` endpoint
+[`scripts/equivalence.sh`](scripts/equivalence.sh) holds the `connect` endpoint
 to the endpoint mq-bridge ships for the same broker, through the `mqb` CLI. For
 NATS JetStream, RabbitMQ (AMQP 0.9) and Redis Streams it fills a fresh queue with
 one implementation and drains it with the other, in all four pairings:
@@ -597,6 +597,18 @@ Related: [golang/go#65050](https://github.com/golang/go/issues/65050) reports
 corruption with multiple Go `c-shared` runtimes on macOS. Until that is
 understood, allow only **one** Go-runtime plugin per process.
 
+### Hosts must install signal handlers before loading the plugin
+
+The Go runtime installs no SIGINT/SIGTERM handler in `c-shared` mode, and
+Benthos only does so in its CLI, not in the `StreamBuilder` path used here. But
+Go requires every non-Go handler to set `SA_ONSTACK`, and it adds that flag only
+to handlers that already exist when the library loads. `tokio::signal`
+(`signal-hook-registry`) does not set it, so a handler registered *after* the
+plugin loads can run on a goroutine stack when the signal lands on a Go thread.
+Register signal handlers first — e.g. `tokio::signal::unix::signal(...)` for
+SIGINT and SIGTERM — then load the plugin. `mqb` does this before loading
+plugins.
+
 ### One broker connector has been run
 
 The data path is exercised by [`tests/data_path.rs`](tests/data_path.rs)
@@ -615,7 +627,7 @@ same fields: `beanstalkd` takes only `address` and genuinely redelivers what a
 consumer rejects. Three of the four checks apply — `metadata_preserved` does
 not, because a beanstalkd job carries no metadata to preserve. It runs in CI
 against a broker container, and skips locally unless
-`MQ_BRIDGE_REDPANDA_BEANSTALKD` is set.
+`MQ_BRIDGE_CONNECT_BEANSTALKD` is set.
 
 Deployment also requires **two files in the same directory**. The Rust plugin
 resolves its sibling from its own absolute path, so this is robust, but it does

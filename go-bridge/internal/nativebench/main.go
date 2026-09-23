@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/marcomq/mq-bridge-redpanda/go-bridge/internal/components"
+	_ "github.com/marcomq/mq-bridge-connect/go-bridge/internal/components"
 	"github.com/redpanda-data/benthos/v4/public/service"
 )
 

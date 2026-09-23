@@ -3,26 +3,26 @@
 #
 #   cargo build --lib
 #   (cd go-bridge && go build -buildmode=c-shared \
-#       -o ../target/debug/libmq_bridge_redpanda_go.dylib .)   # .so on Linux
+#       -o ../target/debug/libmq_bridge_connect_go.dylib .)   # .so on Linux
 #   MQB_PLUGIN_DIR=$PWD/target/debug mqb --config examples/mqb-route.yaml
 #
 # The Rust cdylib and the Go sibling must sit in the same directory: the plugin
-# resolves its sibling next to itself. `MQ_BRIDGE_REDPANDA_GO_LIBRARY` (absolute
+# resolves its sibling next to itself. `MQ_BRIDGE_CONNECT_GO_LIBRARY` (absolute
 # path) overrides that when they cannot be colocated.
 #
 # The same file runs unchanged in the desktop UI and behind the Python and
 # Node bindings — one config format, three ways to run it.
 
 plugins:
-  - "${MQB_PLUGIN_DIR}/libmq_bridge_redpanda.dylib"
+  - "${MQB_PLUGIN_DIR}/libmq_bridge_connect.dylib"
 
 routes:
-  redpanda_demo:
+  connect_demo:
     # Form A: `connector` is the Redpanda Connect component name; every other
     # field is that component's own configuration.
     input:
       custom:
-        name: redpanda
+        name: connect
         config:
           connector: generate
           count: 10
@@ -33,7 +33,7 @@ routes:
     # mq-bridge owns. Use it for processors and stream-level fields.
     output:
       custom:
-        name: redpanda
+        name: connect
         config:
           yaml: |
             # Above 1 the sink may write batches out of source order.

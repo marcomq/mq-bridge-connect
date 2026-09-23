@@ -37,7 +37,7 @@ impl GoStream {
             let go = Arc::clone(&go);
             spawn_blocking(move || go.stream_open(kind, &config))
                 .await
-                .context("the Redpanda stream task failed")??
+                .context("the connect stream task failed")??
         };
         Ok(Arc::new(Self {
             go,
@@ -55,7 +55,7 @@ impl GoStream {
         Ok(
             spawn_blocking(move || this.go.stream_next_batch(handle, max_messages, timeout_ms))
                 .await
-                .context("the Redpanda stream task failed")??,
+                .context("the connect stream task failed")??,
         )
     }
 
@@ -68,7 +68,7 @@ impl GoStream {
         let this = Arc::clone(self);
         spawn_blocking(move || this.go.stream_commit(handle, batch_id, &dispositions))
             .await
-            .context("the Redpanda stream task failed")??;
+            .context("the connect stream task failed")??;
         Ok(())
     }
 
@@ -77,7 +77,7 @@ impl GoStream {
         let this = Arc::clone(self);
         spawn_blocking(move || this.go.stream_publish(handle, &batch))
             .await
-            .context("the Redpanda stream task failed")??;
+            .context("the connect stream task failed")??;
         Ok(())
     }
 
@@ -91,13 +91,13 @@ impl GoStream {
         let this = Arc::clone(self);
         spawn_blocking(move || this.go.stream_close(handle, CLOSE_TIMEOUT_MS))
             .await
-            .context("the Redpanda stream task failed")??;
+            .context("the connect stream task failed")??;
         Ok(())
     }
 
     fn handle(&self) -> anyhow::Result<u64> {
         match self.handle.load(Ordering::Acquire) {
-            0 => bail!("the Redpanda stream is closed"),
+            0 => bail!("the connect stream is closed"),
             handle => Ok(handle),
         }
     }

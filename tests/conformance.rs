@@ -59,11 +59,11 @@ const FULL_SUITE: &[&str] = &[
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_conformance_suite_passes_against_beanstalkd() {
-    let Some(address) = address("MQ_BRIDGE_REDPANDA_BEANSTALKD") else {
+    let Some(address) = address("MQ_BRIDGE_CONNECT_BEANSTALKD") else {
         return;
     };
     let mut options = ConformanceOptions::new(
-        "redpanda-conformance-beanstalkd",
+        "connect-conformance-beanstalkd",
         json!({ "connector": "beanstalkd", "address": address }),
     );
     // A beanstalkd job is a body and nothing else, and the connector's output
@@ -77,7 +77,7 @@ async fn the_conformance_suite_passes_against_beanstalkd() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_conformance_suite_passes_against_nats_jetstream() {
-    let Some(address) = address("MQ_BRIDGE_REDPANDA_NATS") else {
+    let Some(address) = address("MQ_BRIDGE_CONNECT_NATS") else {
         return;
     };
     // The stream outlives the run, and a fresh ephemeral consumer starts at the
@@ -90,7 +90,7 @@ async fn the_conformance_suite_passes_against_nats_jetstream() {
     create_stream(&address, &format!("mqb_conformance_{run_id}"), &subject).await;
 
     let mut options = ConformanceOptions::new(
-        "redpanda-conformance-nats-jetstream",
+        "connect-conformance-nats-jetstream",
         json!({
             "connector": "nats_jetstream",
             "urls": [format!("nats://{address}")],
@@ -108,11 +108,11 @@ async fn the_conformance_suite_passes_against_nats_jetstream() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_conformance_suite_passes_against_redis_list() {
-    let Some(address) = address("MQ_BRIDGE_REDPANDA_REDIS") else {
+    let Some(address) = address("MQ_BRIDGE_CONNECT_REDIS") else {
         return;
     };
     let mut options = ConformanceOptions::new(
-        "redpanda-conformance-redis-list",
+        "connect-conformance-redis-list",
         json!({
             "connector": "redis_list",
             "url": format!("redis://{address}"),
@@ -129,7 +129,7 @@ async fn the_conformance_suite_passes_against_redis_list() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_conformance_suite_passes_against_amqp_0_9() {
-    let Some(address) = address("MQ_BRIDGE_REDPANDA_AMQP") else {
+    let Some(address) = address("MQ_BRIDGE_CONNECT_AMQP") else {
         return;
     };
     // The two directions disagree on every routing field, which is what the
@@ -147,16 +147,16 @@ async fn the_conformance_suite_passes_against_amqp_0_9() {
             },
             "output": { "exchange": "", "key": queue },
     });
-    let mut options = ConformanceOptions::new("redpanda-conformance-amqp-0-9", config.clone());
+    let mut options = ConformanceOptions::new("connect-conformance-amqp-0-9", config.clone());
     options.expect_redelivery = false;
 
     run(options, &["round_trip", "metadata_preserved"]).await;
-    nack_is_redelivered("redpanda-amqp-0-9-nack", &config).await;
+    nack_is_redelivered("connect-amqp-0-9-nack", &config).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_conformance_suite_passes_against_redis_streams() {
-    let Some(address) = address("MQ_BRIDGE_REDPANDA_REDIS") else {
+    let Some(address) = address("MQ_BRIDGE_CONNECT_REDIS") else {
         return;
     };
     // `streams` reads a list and `stream` writes one name, so the shared form
@@ -174,16 +174,16 @@ async fn the_conformance_suite_passes_against_redis_streams() {
             },
             "output": { "stream": stream },
     });
-    let mut options = ConformanceOptions::new("redpanda-conformance-redis-streams", config.clone());
+    let mut options = ConformanceOptions::new("connect-conformance-redis-streams", config.clone());
     options.expect_redelivery = false;
 
     run(options, &["round_trip", "metadata_preserved"]).await;
-    nack_is_redelivered("redpanda-redis-streams-nack", &config).await;
+    nack_is_redelivered("connect-redis-streams-nack", &config).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_conformance_suite_passes_against_mqtt() {
-    let Some(address) = address("MQ_BRIDGE_REDPANDA_MQTT") else {
+    let Some(address) = address("MQ_BRIDGE_CONNECT_MQTT") else {
         return;
     };
     // A broker disconnects the older session when a second client presents the
@@ -212,14 +212,14 @@ async fn the_conformance_suite_passes_against_mqtt() {
     // subscription, and queue messages, while the client is away.
     subscribe_first(&config).await;
 
-    let mut options = ConformanceOptions::new("redpanda-conformance-mqtt", config.clone());
+    let mut options = ConformanceOptions::new("connect-conformance-mqtt", config.clone());
     // MQTT carries no user properties under v3.1.1, which is what this client
     // speaks, so a payload is all that crosses.
     options.expect_metadata = false;
     options.expect_redelivery = false;
 
     run(options, &["round_trip"]).await;
-    nack_is_redelivered("redpanda-mqtt-nack", &config).await;
+    nack_is_redelivered("connect-mqtt-nack", &config).await;
 }
 
 /// A per-run suffix, so a broker that outlives the run cannot replay an earlier

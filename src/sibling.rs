@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context};
 
 pub fn go_library_path() -> anyhow::Result<PathBuf> {
-    if let Some(path) = std::env::var_os("MQ_BRIDGE_REDPANDA_GO_LIBRARY") {
+    if let Some(path) = std::env::var_os("MQ_BRIDGE_CONNECT_GO_LIBRARY") {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
-            bail!("MQ_BRIDGE_REDPANDA_GO_LIBRARY must be an absolute path");
+            bail!("MQ_BRIDGE_CONNECT_GO_LIBRARY must be an absolute path");
         }
         return Ok(path);
     }
@@ -20,11 +20,11 @@ pub fn go_library_path() -> anyhow::Result<PathBuf> {
 
 fn go_library_filename() -> &'static Path {
     #[cfg(target_os = "windows")]
-    return Path::new("mq_bridge_redpanda_go.dll");
+    return Path::new("mq_bridge_connect_go.dll");
     #[cfg(target_os = "macos")]
-    return Path::new("libmq_bridge_redpanda_go.dylib");
+    return Path::new("libmq_bridge_connect_go.dylib");
     #[cfg(all(unix, not(target_os = "macos")))]
-    return Path::new("libmq_bridge_redpanda_go.so");
+    return Path::new("libmq_bridge_connect_go.so");
 }
 
 #[cfg(unix)]

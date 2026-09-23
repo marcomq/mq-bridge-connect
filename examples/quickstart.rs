@@ -8,20 +8,20 @@
 //! ```text
 //! cargo build --lib
 //! (cd go-bridge && go build -buildmode=c-shared \
-//!     -o ../target/debug/libmq_bridge_redpanda_go.dylib .)   # .so on Linux
-//! MQ_BRIDGE_REDPANDA_GO_LIBRARY=$PWD/target/debug/libmq_bridge_redpanda_go.dylib \
+//!     -o ../target/debug/libmq_bridge_connect_go.dylib .)   # .so on Linux
+//! MQ_BRIDGE_CONNECT_GO_LIBRARY=$PWD/target/debug/libmq_bridge_connect_go.dylib \
 //!     cargo run --example quickstart
 //! ```
 
 use mq_bridge::traits::{CustomEndpointFactory, MessageDisposition};
-use mq_bridge_redpanda::RedpandaFactory;
+use mq_bridge_connect::ConnectFactory;
 use serde_json::json;
 
 const MESSAGES: usize = 3;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let factory = RedpandaFactory::default();
+    let factory = ConnectFactory::default();
 
     // Form A: name a connector, and every other field goes to it. mq-bridge
     // owns the other end of the stream, so there is no `output` to write.

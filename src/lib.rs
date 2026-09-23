@@ -1,8 +1,8 @@
 //! Redpanda Connect connector compatibility plugin for mq-bridge.
 //!
 //! mq-bridge owns one end of every stream and Benthos owns the other: a
-//! `redpanda` input is a Benthos stream whose output is mq-bridge, and a
-//! `redpanda` output is one whose input is mq-bridge. See [`config`] for the two
+//! `connect` input is a Benthos stream whose output is mq-bridge, and a
+//! `connect` output is one whose input is mq-bridge. See [`config`] for the two
 //! configuration forms.
 
 mod config;
@@ -21,14 +21,14 @@ use async_trait::async_trait;
 use mq_bridge::traits::{CustomEndpointFactory, MessageConsumer, MessagePublisher};
 
 #[derive(Debug)]
-pub struct RedpandaFactory {
+pub struct ConnectFactory {
     go: Arc<GoLibrary>,
 }
 
-impl Default for RedpandaFactory {
+impl Default for ConnectFactory {
     fn default() -> Self {
         let path = sibling::go_library_path().unwrap_or_else(|error| {
-            panic!("failed to resolve the Redpanda Go sibling library: {error:#}")
+            panic!("failed to resolve the Go sibling library: {error:#}")
         });
         let go = unsafe { GoLibrary::open(&path) }
             .and_then(|go| go.probe().map(|()| go).map_err(anyhow::Error::from))
@@ -38,7 +38,7 @@ impl Default for RedpandaFactory {
 }
 
 #[async_trait]
-impl CustomEndpointFactory for RedpandaFactory {
+impl CustomEndpointFactory for ConnectFactory {
     fn config_schema(&self) -> Option<serde_json::Value> {
         Some(config::config_schema())
     }
@@ -68,12 +68,12 @@ impl CustomEndpointFactory for RedpandaFactory {
 /// permanent/retryable classification the constructors made survives.
 fn route_context(route_name: &str, direction: &str, error: anyhow::Error) -> anyhow::Error {
     error.context(format!(
-        "route {route_name:?}: failed to create the redpanda {direction}"
+        "route {route_name:?}: failed to create the connect {direction}"
     ))
 }
 
 #[cfg(feature = "plugin")]
 mq_bridge::export_endpoint_plugin! {
-    name: "redpanda",
-    factory: RedpandaFactory,
+    name: "connect",
+    factory: ConnectFactory,
 }

@@ -17,7 +17,7 @@ use crate::{config, wire};
 const LIVE_WAIT_MS: u32 = 1_000;
 const DRAIN_WAIT_MS: u32 = 250;
 
-pub(crate) struct RedpandaConsumer {
+pub(crate) struct ConnectConsumer {
     stream: Arc<GoStream>,
     exit_on_empty: bool,
 }
@@ -29,14 +29,14 @@ pub(crate) async fn create(
     let config = config::stream_config(config::Direction::Consumer, value)
         .map_err(|error| anyhow::Error::new(ConsumerError::Permanent(error)))?;
     let stream = GoStream::open(go, StreamKind::Consumer, config).await?;
-    Ok(Box::new(RedpandaConsumer {
+    Ok(Box::new(ConnectConsumer {
         stream,
         exit_on_empty: false,
     }))
 }
 
 #[async_trait]
-impl MessageConsumer for RedpandaConsumer {
+impl MessageConsumer for ConnectConsumer {
     fn set_exit_on_empty(&mut self, exit_on_empty: bool) {
         self.exit_on_empty = exit_on_empty;
     }
@@ -76,7 +76,7 @@ impl MessageConsumer for RedpandaConsumer {
             Box::pin(async move {
                 if dispositions.len() != expected {
                     bail!(
-                        "Redpanda batch commit received {} dispositions for {expected} messages",
+                        "connect batch commit received {} dispositions for {expected} messages",
                         dispositions.len()
                     );
                 }

@@ -23,17 +23,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          path: mq-bridge-redpanda
+          path: mq-bridge-connect
       - uses: actions/setup-go@v7
         with:
-          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
-          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+          go-version-file: mq-bridge-connect/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-connect/go-bridge/go.sum
       - uses: dtolnay/rust-toolchain@stable
       - name: No RCL source is linked
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: python3 scripts/check-rcl.py
       - name: THIRD_PARTY_NOTICES is current
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: |
           python3 scripts/gen-third-party-notices.py
           git diff --exit-code THIRD_PARTY_NOTICES
@@ -55,35 +55,35 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            rust_library: libmq_bridge_redpanda.so
-            go_library: libmq_bridge_redpanda_go.so
+            rust_library: libmq_bridge_connect.so
+            go_library: libmq_bridge_connect_go.so
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            rust_library: libmq_bridge_redpanda.so
-            go_library: libmq_bridge_redpanda_go.so
+            rust_library: libmq_bridge_connect.so
+            go_library: libmq_bridge_connect_go.so
           - os: macos-latest
             target: aarch64-apple-darwin
-            rust_library: libmq_bridge_redpanda.dylib
-            go_library: libmq_bridge_redpanda_go.dylib
+            rust_library: libmq_bridge_connect.dylib
+            go_library: libmq_bridge_connect_go.dylib
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            rust_library: mq_bridge_redpanda.dll
-            go_library: mq_bridge_redpanda_go.dll
+            rust_library: mq_bridge_connect.dll
+            go_library: mq_bridge_connect_go.dll
     steps:
       - uses: actions/checkout@v7
         with:
-          path: mq-bridge-redpanda
+          path: mq-bridge-connect
       - uses: actions/setup-go@v7
         with:
-          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
-          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+          go-version-file: mq-bridge-connect/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-connect/go-bridge/go.sum
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mq-bridge-redpanda
+          workspaces: mq-bridge-connect
 
       - name: Build both libraries
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         env:
           CGO_ENABLED: "1"
         run: |
@@ -96,14 +96,14 @@ jobs:
       # separates them turns a compliant build into a non-compliant
       # distribution, so they are staged together and verified below.
       - name: Stage the archive
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             version="${{ inputs.version }}"
           else
             version="${GITHUB_REF_NAME}"
           fi
-          name="mq-bridge-redpanda-${version#v}-${{ matrix.target }}"
+          name="mq-bridge-connect-${version#v}-${{ matrix.target }}"
           echo "ARCHIVE_NAME=${name}" >> "$GITHUB_ENV"
           mkdir -p "stage/${name}"
           cp "target/release/${{ matrix.rust_library }}" "stage/${name}/"
@@ -114,7 +114,7 @@ jobs:
       # A release that drops the notices is the failure mode this whole effort
       # is about, so it fails the build rather than being caught after upload.
       - name: The archive carries its notices
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: |
           missing=0
           for required in \
@@ -129,7 +129,7 @@ jobs:
           exit "$missing"
 
       - name: Pack
-        working-directory: mq-bridge-redpanda/stage
+        working-directory: mq-bridge-connect/stage
         run: |
           tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
           if command -v sha256sum >/dev/null 2>&1; then
@@ -142,8 +142,8 @@ jobs:
         with:
           name: standalone-${{ matrix.target }}
           path: |
-            mq-bridge-redpanda/stage/${{ env.ARCHIVE_NAME }}.tar.gz
-            mq-bridge-redpanda/stage/${{ env.ARCHIVE_NAME }}.tar.gz.sha256
+            mq-bridge-connect/stage/${{ env.ARCHIVE_NAME }}.tar.gz
+            mq-bridge-connect/stage/${{ env.ARCHIVE_NAME }}.tar.gz.sha256
 
   publish:
     name: Publish the GitHub release
@@ -210,7 +210,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p packaging/conda/stage
-          tar xzf release-dist/mq-bridge-redpanda-*.tar.gz \
+          tar xzf release-dist/mq-bridge-connect-*.tar.gz \
             -C packaging/conda/stage --strip-components=1
           echo "MQ_BRIDGE_PLUGIN_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 

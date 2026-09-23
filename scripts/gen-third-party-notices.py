@@ -282,7 +282,7 @@ def rust_closure(target):
     ).stdout)
     packages = {p["id"]: p for p in meta["packages"]}
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-    root = next(i for i, p in packages.items() if p["name"] == "mq-bridge-redpanda")
+    root = next(i for i, p in packages.items() if p["name"] == "mq-bridge-connect")
     seen, stack = set(), [root]
     while stack:
         current = stack.pop()
@@ -295,7 +295,7 @@ def rust_closure(target):
     return {(packages[i]["name"], packages[i]["version"],
              packages[i].get("license") or "UNKNOWN",
              os.path.dirname(packages[i]["manifest_path"]))
-            for i in seen if packages[i]["name"] != "mq-bridge-redpanda"}
+            for i in seen if packages[i]["name"] != "mq-bridge-connect"}
 
 
 def rust_crates(texts):

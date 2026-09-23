@@ -3,7 +3,7 @@
 //! Form A names a connector and passes the rest of the object to it:
 //!
 //! ```yaml
-//! custom: { name: redpanda, config: { connector: mqtt, urls: [...], topics: [...] } }
+//! custom: { name: connect, config: { connector: mqtt, urls: [...], topics: [...] } }
 //! ```
 //!
 //! `input` and `output` inside form A carry the fields whose names differ
@@ -12,7 +12,7 @@
 //!
 //! ```yaml
 //! custom:
-//!   name: redpanda
+//!   name: connect
 //!   config:
 //!     connector: amqp_0_9
 //!     urls: [ "amqp://localhost:5672/" ]
@@ -24,7 +24,7 @@
 //!
 //! ```yaml
 //! custom:
-//!   name: redpanda
+//!   name: connect
 //!   config:
 //!     yaml: |
 //!       input: { mqtt: { urls: [...], topics: [...] } }
@@ -65,7 +65,7 @@ impl Direction {
 /// configuration that also declares the end mq-bridge owns.
 pub(crate) fn stream_config(direction: Direction, config: &Value) -> Result<String> {
     let Value::Object(fields) = config else {
-        bail!("the redpanda endpoint needs a configuration object");
+        bail!("the connect endpoint needs a configuration object");
     };
 
     match (fields.get("yaml"), fields.get("connector")) {
@@ -77,7 +77,7 @@ pub(crate) fn stream_config(direction: Direction, config: &Value) -> Result<Stri
         (None, Some(connector)) => synthesize(direction, fields, connector),
         (None, None) => bail!(
             "configuration must set either `connector` (a Redpanda Connect component name, \
-             which a URI spells `redpanda+<component>://`) or `yaml` (a Redpanda Connect \
+             which a URI spells `connect+<component>://`) or `yaml` (a Redpanda Connect \
              configuration)"
         ),
     }
@@ -91,7 +91,7 @@ pub(crate) fn stream_config(direction: Direction, config: &Value) -> Result<Stri
 /// `additionalProperties` stays open and the exclusion of the two forms is left
 /// to [`stream_config`], which reports it by name.
 pub(crate) fn config_schema() -> Value {
-    // The three annotated fields spell out `redpanda+mqtt://host:1883/orders`.
+    // The three annotated fields spell out `connect+mqtt://host:1883/orders`.
     // Claiming a position also suppresses the pre-schema mapping -- the whole
     // URI as `url` -- which this endpoint could not accept: form B rejects any
     // key beside `yaml`, and form A would forward `url` to a component that
@@ -172,7 +172,7 @@ fn synthesize(
         bail!("`connector` must not be empty");
     }
     // A URI scheme cannot hold `_` (RFC 3986 section 3.1), so `amqp_0_9` is
-    // spelled `redpanda+amqp-0-9://`. No component name contains a `-`, which
+    // spelled `connect+amqp-0-9://`. No component name contains a `-`, which
     // is what makes the way back unambiguous.
     let connector = connector.replace('-', "_");
 
@@ -503,7 +503,7 @@ mod tests {
     /// and form A hands to a component that has no such field.
     #[test]
     fn a_uri_names_the_connector_in_its_scheme() {
-        let config = from_uri("redpanda+mqtt://localhost:1883/orders?client_id=reader");
+        let config = from_uri("connect+mqtt://localhost:1883/orders?client_id=reader");
 
         assert_eq!(config["connector"], "mqtt");
         assert_eq!(config["address"], "mqtt://localhost:1883");
@@ -532,13 +532,13 @@ mod tests {
     /// names would have taken four of.
     #[test]
     fn a_uri_reaches_a_connector_s_own_field_names_in_both_directions() {
-        let read = component(Direction::Consumer, "redpanda+mqtt://localhost:1883/orders");
+        let read = component(Direction::Consumer, "connect+mqtt://localhost:1883/orders");
         assert_eq!(read["mqtt"]["urls"], json!(["tcp://localhost:1883"]));
         assert_eq!(read["mqtt"]["topics"], json!(["orders"]));
 
         let write = component(
             Direction::Publisher,
-            "redpanda+mqtt://localhost:1883/orders",
+            "connect+mqtt://localhost:1883/orders",
         );
         assert_eq!(write["mqtt"]["urls"], json!(["tcp://localhost:1883"]));
         assert_eq!(write["mqtt"]["topic"], json!("orders"));
@@ -550,7 +550,7 @@ mod tests {
     fn a_hyphenated_scheme_reaches_the_component_whose_name_has_underscores() {
         let write = component(
             Direction::Publisher,
-            "redpanda+amqp-0-9://localhost:5672/jobs",
+            "connect+amqp-0-9://localhost:5672/jobs",
         );
 
         assert_eq!(write["amqp_0_9"]["urls"], json!(["amqp://localhost:5672"]));
@@ -559,7 +559,7 @@ mod tests {
 
         let read = component(
             Direction::Consumer,
-            "redpanda+amqp-0-9://localhost:5672/jobs",
+            "connect+amqp-0-9://localhost:5672/jobs",
         );
         assert_eq!(read["amqp_0_9"]["queue"], json!("jobs"));
         assert!(read["amqp_0_9"].get("exchange").is_none());

@@ -1,4 +1,4 @@
-module github.com/marcomq/mq-bridge-redpanda/go-bridge
+module github.com/marcomq/mq-bridge-connect/go-bridge
 
 go 1.26.6
 

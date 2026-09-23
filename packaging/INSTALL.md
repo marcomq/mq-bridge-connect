@@ -1,4 +1,4 @@
-# Installing the mq-bridge Redpanda Connect plugin
+# Installing mq-bridge-connect
 
 This is an unofficial plugin. It is not affiliated with, endorsed by or
 supported by Redpanda Data, Inc. or the Benthos project.
@@ -7,8 +7,8 @@ This directory is one unit. It contains:
 
 | File | What it is |
 | :--- | :--- |
-| `libmq_bridge_redpanda.{so,dylib}` | the plugin mq-bridge loads |
-| `libmq_bridge_redpanda_go.{so,dylib}` | its Go sibling, loaded by the plugin |
+| `libmq_bridge_connect.{so,dylib}` | the plugin mq-bridge loads |
+| `libmq_bridge_connect_go.{so,dylib}` | its Go sibling, loaded by the plugin |
 | `THIRD_PARTY_NOTICES` | every third-party licence linked into the two libraries, in full |
 | `LICENSE-MIT`, `LICENSE-APACHE` | this project's own dual licence |
 
@@ -30,8 +30,8 @@ Homebrew and conda do everything below for you — both libraries in one
 directory mq-bridge already searches, and the notices installed alongside:
 
 ```console
-brew install marcomq/tap/mq-bridge-redpanda
-conda install -c marcomq mq-bridge-redpanda
+brew install marcomq/tap/mq-bridge-connect
+conda install -c marcomq mq-bridge-connect
 ```
 
 The rest of this file is for installing the archive by hand.
@@ -39,7 +39,7 @@ The rest of this file is for installing the archive by hand.
 ## Where to put it
 
 mq-bridge resolves a plugin by the endpoint name a route asks for, looking for
-`libmq_bridge_redpanda.{so,dylib}` (`mq_bridge_redpanda.dll` on Windows) under
+`libmq_bridge_connect.{so,dylib}` (`mq_bridge_connect.dll` on Windows) under
 `lib/mq-bridge` and plain `lib` on a search path covering:
 
 - `MQB_PLUGIN_DIR`
@@ -58,10 +58,10 @@ For a prefix-style install, put both libraries in `<prefix>/lib/mq-bridge/` and
 the notices beside them:
 
 ```console
-install -d "$PREFIX/lib/mq-bridge" "$PREFIX/share/doc/mq-bridge-redpanda"
-install -m 0755 libmq_bridge_redpanda*.so "$PREFIX/lib/mq-bridge/"
+install -d "$PREFIX/lib/mq-bridge" "$PREFIX/share/doc/mq-bridge-connect"
+install -m 0755 libmq_bridge_connect*.so "$PREFIX/lib/mq-bridge/"
 install -m 0644 THIRD_PARTY_NOTICES LICENSE-MIT LICENSE-APACHE \
-    "$PREFIX/share/doc/mq-bridge-redpanda/"
+    "$PREFIX/share/doc/mq-bridge-connect/"
 ```
 
 Both libraries must land in the same directory: the plugin loads its Go sibling

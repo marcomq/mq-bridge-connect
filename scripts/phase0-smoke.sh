@@ -7,12 +7,12 @@ profile=${PROFILE:-debug}
 
 case "$(uname -s)" in
     Darwin)
-        rust_library="libmq_bridge_redpanda.dylib"
-        go_library="libmq_bridge_redpanda_go.dylib"
+        rust_library="libmq_bridge_connect.dylib"
+        go_library="libmq_bridge_connect_go.dylib"
         ;;
     Linux)
-        rust_library="libmq_bridge_redpanda.so"
-        go_library="libmq_bridge_redpanda_go.so"
+        rust_library="libmq_bridge_connect.so"
+        go_library="libmq_bridge_connect_go.so"
         ;;
     *)
         echo "unsupported Unix platform: $(uname -s)" >&2

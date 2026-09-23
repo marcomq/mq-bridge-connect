@@ -82,7 +82,7 @@ impl GoLibrary {
     ///
     /// # Safety
     ///
-    /// The target must be a trusted mq-bridge-redpanda Go sibling library. Loading a
+    /// The target must be a trusted mq-bridge-connect Go sibling library. Loading a
     /// dynamic library executes its initialization code.
     pub unsafe fn open(path: &Path) -> anyhow::Result<Self> {
         let library = unsafe { Library::new(path) }

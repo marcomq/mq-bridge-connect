@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use mq_bridge_redpanda::RedpandaFactory;
+use mq_bridge_connect::ConnectFactory;
 
 static LIBRARY: OnceLock<()> = OnceLock::new();
 
@@ -16,11 +16,11 @@ pub fn go_library() -> PathBuf {
         "release"
     };
     let name = if cfg!(target_os = "windows") {
-        "mq_bridge_redpanda_go.dll"
+        "mq_bridge_connect_go.dll"
     } else if cfg!(target_os = "macos") {
-        "libmq_bridge_redpanda_go.dylib"
+        "libmq_bridge_connect_go.dylib"
     } else {
-        "libmq_bridge_redpanda_go.so"
+        "libmq_bridge_connect_go.so"
     };
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
@@ -30,7 +30,7 @@ pub fn go_library() -> PathBuf {
 
 /// The test binary lives in `target/<profile>/deps`, so sibling resolution would
 /// look one directory too deep.
-pub fn factory() -> RedpandaFactory {
+pub fn factory() -> ConnectFactory {
     let library = go_library();
     assert!(
         library.exists(),
@@ -38,6 +38,6 @@ pub fn factory() -> RedpandaFactory {
         library.display()
     );
     // `set_var` is not thread-safe, and the tests in one binary run in parallel.
-    LIBRARY.get_or_init(|| std::env::set_var("MQ_BRIDGE_REDPANDA_GO_LIBRARY", &library));
-    RedpandaFactory::default()
+    LIBRARY.get_or_init(|| std::env::set_var("MQ_BRIDGE_CONNECT_GO_LIBRARY", &library));
+    ConnectFactory::default()
 }

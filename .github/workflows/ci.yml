@@ -52,19 +52,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          path: mq-bridge-redpanda
+          path: mq-bridge-connect
       - uses: actions/setup-go@v7
         with:
-          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
-          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+          go-version-file: mq-bridge-connect/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-connect/go-bridge/go.sum
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mq-bridge-redpanda
+          workspaces: mq-bridge-connect
       - name: Formatting and lints
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
@@ -72,7 +72,7 @@ jobs:
       # platform, so the macOS closure is a different scan and needs its own.
       - name: No RCL source is linked (macOS closure)
         if: matrix.os == 'macos-latest'
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: python3 scripts/check-rcl.py
       # The notices are generated from what is actually linked, so a go.sum
       # bump, a components.allow edit or a Cargo.lock change can add a module,
@@ -82,7 +82,7 @@ jobs:
       # GOOS, GOARCH and the Rust targets, so one runner covers every platform.
       - name: THIRD_PARTY_NOTICES is current
         if: matrix.os == 'ubuntu-latest'
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: |
           python3 scripts/gen-third-party-notices.py
           git diff --exit-code THIRD_PARTY_NOTICES
@@ -90,7 +90,7 @@ jobs:
       # Builds the Go c-shared sibling and the Rust cdylib, runs every test, then
       # the loader smoke test three times.
       - name: Build, test and smoke
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         run: sh scripts/phase0-smoke.sh
 
   conformance:
@@ -107,7 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          path: mq-bridge-redpanda
+          path: mq-bridge-connect
       - name: Check out the mq-bridge host
         uses: actions/checkout@v7
         with:
@@ -115,12 +115,12 @@ jobs:
           path: mq-bridge
       - uses: actions/setup-go@v7
         with:
-          go-version-file: mq-bridge-redpanda/go-bridge/go.mod
-          cache-dependency-path: mq-bridge-redpanda/go-bridge/go.sum
+          go-version-file: mq-bridge-connect/go-bridge/go.mod
+          cache-dependency-path: mq-bridge-connect/go-bridge/go.sum
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mq-bridge-redpanda
+          workspaces: mq-bridge-connect
       - name: Wait for beanstalkd
         run: |
           for _ in $(seq 1 30); do
@@ -140,23 +140,23 @@ jobs:
             docker compose -f "mq-bridge/tests/integration/docker-compose/$broker.yml" up -d --wait
           done
       - name: Build the Go sibling
-        working-directory: mq-bridge-redpanda/go-bridge
+        working-directory: mq-bridge-connect/go-bridge
         run: |
           mkdir -p ../target/debug
-          go build -buildmode=c-shared -o ../target/debug/libmq_bridge_redpanda_go.so .
+          go build -buildmode=c-shared -o ../target/debug/libmq_bridge_connect_go.so .
       # The acceptance gate, across six transports: work queues that redeliver
       # and one that cannot, a persistent stream, a routed queue, a consumer
       # group and a QoS 1 topic. Each test asserts the exact set of checks its
       # transport supports, so a check that stops applying fails rather than
       # vanishing.
       - name: Run the conformance suite
-        working-directory: mq-bridge-redpanda
+        working-directory: mq-bridge-connect
         env:
-          MQ_BRIDGE_REDPANDA_BEANSTALKD: 127.0.0.1:11300
-          MQ_BRIDGE_REDPANDA_NATS: 127.0.0.1:4222
-          MQ_BRIDGE_REDPANDA_REDIS: 127.0.0.1:6379
-          MQ_BRIDGE_REDPANDA_AMQP: 127.0.0.1:5672
-          MQ_BRIDGE_REDPANDA_MQTT: 127.0.0.1:1883
+          MQ_BRIDGE_CONNECT_BEANSTALKD: 127.0.0.1:11300
+          MQ_BRIDGE_CONNECT_NATS: 127.0.0.1:4222
+          MQ_BRIDGE_CONNECT_REDIS: 127.0.0.1:6379
+          MQ_BRIDGE_CONNECT_AMQP: 127.0.0.1:5672
+          MQ_BRIDGE_CONNECT_MQTT: 127.0.0.1:1883
         # Serially: `redis_list` and `redis_streams` share a broker, and the
         # suite's checks assume nothing else is draining the transport.
         run: cargo test --locked --test conformance -- --nocapture --test-threads 1

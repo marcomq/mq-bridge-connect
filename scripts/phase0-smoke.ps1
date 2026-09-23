@@ -4,8 +4,8 @@ $RepoDir = Split-Path -Parent $PSScriptRoot
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $RepoDir "target" }
 $Profile = if ($env:PROFILE) { $env:PROFILE } else { "debug" }
 $OutputDir = Join-Path $TargetDir $Profile
-$GoLibrary = Join-Path $OutputDir "mq_bridge_redpanda_go.dll"
-$RustLibrary = Join-Path $OutputDir "mq_bridge_redpanda.dll"
+$GoLibrary = Join-Path $OutputDir "mq_bridge_connect_go.dll"
+$RustLibrary = Join-Path $OutputDir "mq_bridge_connect.dll"
 $Smoke = Join-Path $OutputDir "phase0_smoke.exe"
 
 

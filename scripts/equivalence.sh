@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Holds the `redpanda` endpoint to mq-bridge's native endpoint on the same
+# Holds the `connect` endpoint to mq-bridge's native endpoint on the same
 # broker, through the `mqb` CLI. Per transport it runs four pairings — the queue
 # is filled by one implementation and drained by the other — each on a fresh
 # queue or stream. Every pairing must deliver exactly the messages sent, and
@@ -24,10 +24,10 @@ case "$(uname -s)" in
     Linux)  ext=so ;;
     *) echo "unsupported Unix platform: $(uname -s)" >&2; exit 2 ;;
 esac
-plugin="$target_dir/release/libmq_bridge_redpanda.$ext"
+plugin="$target_dir/release/libmq_bridge_connect.$ext"
 
 echo "building..." >&2
-(cd "$repo_dir/go-bridge" && go build -buildmode=c-shared -o "$target_dir/release/libmq_bridge_redpanda_go.$ext" .)
+(cd "$repo_dir/go-bridge" && go build -buildmode=c-shared -o "$target_dir/release/libmq_bridge_connect_go.$ext" .)
 (cd "$repo_dir" && cargo build --locked --release --lib)
 
 work=$(mktemp -d)
@@ -69,22 +69,22 @@ run_route() {
     awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }'
 }
 
-# $1 transport, $2 native|redpanda, $3 in|out, $4 run id
+# $1 transport, $2 native|connect, $3 in|out, $4 run id
 endpoint() {
     case "$1:$2:$3" in
         nats:native:*)
             printf 'nats: { url: "nats://%s", stream: "%s", subject: "%s.data" }' "$nats" "$4" "$4" ;;
-        nats:redpanda:*)
-            printf 'custom: { name: redpanda, config: { connector: nats_jetstream, urls: ["nats://%s"], subject: "%s.data", output: { metadata: { include_patterns: [".*"] } } } }' "$nats" "$4" ;;
+        nats:connect:*)
+            printf 'custom: { name: connect, config: { connector: nats_jetstream, urls: ["nats://%s"], subject: "%s.data", output: { metadata: { include_patterns: [".*"] } } } }' "$nats" "$4" ;;
         amqp:native:*)
             printf 'amqp: { url: "amqp://guest:guest@%s/%%2f", queue: "%s" }' "$amqp" "$4" ;;
-        amqp:redpanda:*)
-            printf 'custom: { name: redpanda, config: { connector: amqp_0_9, urls: ["amqp://guest:guest@%s/"], input: { queue: "%s", queue_declare: { enabled: true, durable: true } }, output: { exchange: "", key: "%s" } } }' "$amqp" "$4" "$4" ;;
+        amqp:connect:*)
+            printf 'custom: { name: connect, config: { connector: amqp_0_9, urls: ["amqp://guest:guest@%s/"], input: { queue: "%s", queue_declare: { enabled: true, durable: true } }, output: { exchange: "", key: "%s" } } }' "$amqp" "$4" "$4" ;;
         redis:native:*)
             printf 'redis_streams: { url: "redis://%s", stream: "%s", read_from_start: true }' "$redis" "$4" ;;
         # mq-bridge keeps the body in a `payload` field; Benthos defaults to `body`.
-        redis:redpanda:*)
-            printf 'custom: { name: redpanda, config: { connector: redis_streams, url: "redis://%s", body_key: payload, input: { streams: ["%s"], consumer_group: equivalence, create_streams: true, start_from_oldest: true }, output: { stream: "%s" } } }' "$redis" "$4" "$4" ;;
+        redis:connect:*)
+            printf 'custom: { name: connect, config: { connector: redis_streams, url: "redis://%s", body_key: payload, input: { streams: ["%s"], consumer_group: equivalence, create_streams: true, start_from_oldest: true }, output: { stream: "%s" } } }' "$redis" "$4" "$4" ;;
     esac
 }
 
@@ -98,13 +98,13 @@ failures=0
 printf '%-15s %-22s %9s %9s %12s %12s\n' transport "fill -> drain" received metadata "fill msg/s" "drain msg/s"
 printf -- '-------------------------------------------------------------------------------------\n'
 for transport in nats amqp redis; do
-    for pairing in native:native native:redpanda redpanda:native redpanda:redpanda; do
+    for pairing in native:native native:connect connect:native connect:connect; do
         producer=${pairing%%:*}
         consumer=${pairing##*:}
         run="mqb-equivalence-$(date +%s)-$transport-$producer-$consumer"
         out="$work/$run.jsonl"
 
-        # A native publisher creates what the Redpanda output assumes exists:
+        # A native publisher creates what the connect output assumes exists:
         # the JetStream stream, and the queue the default exchange routes to.
         route "$work/$run-setup.yaml" "file: { path: \"$work/empty.txt\" }" "$(endpoint "$transport" native out "$run")"
         run_route "$work/$run-setup.yaml" > /dev/null

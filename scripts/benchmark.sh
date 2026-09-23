@@ -16,28 +16,28 @@ max_in_flight=${MAX_IN_FLIGHT:-64}
 repeats=${REPEATS:-3}
 
 case "$(uname -s)" in
-    Darwin) go_library="libmq_bridge_redpanda_go.dylib" ;;
-    Linux)  go_library="libmq_bridge_redpanda_go.so" ;;
+    Darwin) go_library="libmq_bridge_connect_go.dylib" ;;
+    Linux)  go_library="libmq_bridge_connect_go.so" ;;
     *) echo "unsupported Unix platform: $(uname -s)" >&2; exit 2 ;;
 esac
 
 # The Go library carries no debug/release distinction, so whichever profile built
 # it last is both the newest ABI and the same optimized code.
-if [ -z "${MQ_BRIDGE_REDPANDA_GO_LIBRARY:-}" ]; then
+if [ -z "${MQ_BRIDGE_CONNECT_GO_LIBRARY:-}" ]; then
     built=
     for profile in release debug; do
         [ -f "$target_dir/$profile/$go_library" ] &&
             built="$built $target_dir/$profile/$go_library"
     done
     # shellcheck disable=SC2086
-    MQ_BRIDGE_REDPANDA_GO_LIBRARY=$(ls -t $built 2>/dev/null | head -n 1)
+    MQ_BRIDGE_CONNECT_GO_LIBRARY=$(ls -t $built 2>/dev/null | head -n 1)
 fi
-if [ -z "$MQ_BRIDGE_REDPANDA_GO_LIBRARY" ] || [ ! -f "$MQ_BRIDGE_REDPANDA_GO_LIBRARY" ]; then
+if [ -z "$MQ_BRIDGE_CONNECT_GO_LIBRARY" ] || [ ! -f "$MQ_BRIDGE_CONNECT_GO_LIBRARY" ]; then
     echo "no Go library found; run scripts/phase0-smoke.sh first" >&2
     exit 1
 fi
-export MQ_BRIDGE_REDPANDA_GO_LIBRARY
-echo "go library: $MQ_BRIDGE_REDPANDA_GO_LIBRARY" >&2
+export MQ_BRIDGE_CONNECT_GO_LIBRARY
+echo "go library: $MQ_BRIDGE_CONNECT_GO_LIBRARY" >&2
 
 echo "building..." >&2
 (cd "$repo_dir/go-bridge" && go build -o "$target_dir/release/nativebench" ./internal/nativebench)

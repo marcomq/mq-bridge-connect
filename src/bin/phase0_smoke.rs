@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context};
 use mq_bridge::plugin::load_endpoint_plugin;
-use mq_bridge_redpanda::GoLibrary;
+use mq_bridge_connect::GoLibrary;
 
 const DIRECT_LOAD_CYCLES: usize = 8;
 
@@ -56,8 +56,8 @@ fn main() -> anyhow::Result<()> {
 
     let info = load_endpoint_plugin(&plugin)
         .with_context(|| format!("failed to load Rust plugin {}", plugin.display()))?;
-    if info.name != "redpanda" {
-        bail!("loaded endpoint name {:?}, expected redpanda", info.name);
+    if info.name != "connect" {
+        bail!("loaded endpoint name {:?}, expected connect", info.name);
     }
     if !(info.supports_consumer && info.supports_publisher) {
         bail!("the Phase 0 plugin must advertise both future endpoint directions");

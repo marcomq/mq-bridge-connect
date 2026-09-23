@@ -505,7 +505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mq-bridge-redpanda"
+name = "mq-bridge-connect"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -2,12 +2,12 @@
 
 The Python binding never compiled this endpoint in; it loads the shared library
 at runtime and the endpoint is then addressable by the name the plugin exports
-(`redpanda`), exactly as in Rust or in an `mqb` config.
+(`connect`), exactly as in Rust or in an `mqb` config.
 
     pip install mq-bridge-py
     cargo build --lib
     (cd go-bridge && go build -buildmode=c-shared \
-        -o ../target/debug/libmq_bridge_redpanda_go.dylib .)   # .so on Linux
+        -o ../target/debug/libmq_bridge_connect_go.dylib .)   # .so on Linux
     python examples/python_route.py
 
 A plugin is native code with the interpreter's privileges, not a sandboxed
@@ -22,20 +22,20 @@ import mq_bridge
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SUFFIX = ".dylib" if platform.system() == "Darwin" else ".so"
-PLUGIN = REPO / "target" / "debug" / f"libmq_bridge_redpanda{SUFFIX}"
+PLUGIN = REPO / "target" / "debug" / f"libmq_bridge_connect{SUFFIX}"
 OUTPUT = REPO / "target" / "python-route-output.jsonl"
 
 # The Go sibling is resolved next to the Rust library, so both must be in
 # target/debug. Loading twice is a no-op; a second library claiming the name
-# `redpanda` is rejected rather than silently replacing the first.
+# `connect` is rejected rather than silently replacing the first.
 mq_bridge.load_endpoint_plugin(str(PLUGIN))
 
 CONFIG = f"""
 routes:
-  redpanda_demo:
+  connect_demo:
     input:
       custom:
-        name: redpanda
+        name: connect
         config:
           connector: generate
           count: 10
@@ -43,7 +43,7 @@ routes:
           mapping: "root.id = counter()"
     output:
       custom:
-        name: redpanda
+        name: connect
         config:
           yaml: |
             output:
@@ -71,7 +71,7 @@ def handle(message):
 def main() -> None:
     OUTPUT.unlink(missing_ok=True)
 
-    route = mq_bridge.Route.from_yaml_str(CONFIG, "redpanda_demo").with_handler(handle)
+    route = mq_bridge.Route.from_yaml_str(CONFIG, "connect_demo").with_handler(handle)
     # start() deploys on a background thread and returns; run() blocks instead.
     route.start()
     try:

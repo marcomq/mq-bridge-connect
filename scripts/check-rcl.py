@@ -22,7 +22,7 @@ MARKER = "under the Redpanda Community"
 
 # Importing this is what pulls the whole curated catalogue in. If it is missing
 # from the closure, the scan covered something other than the shipped build.
-SENTINEL = "github.com/marcomq/mq-bridge-redpanda/go-bridge/internal/components"
+SENTINEL = "github.com/marcomq/mq-bridge-connect/go-bridge/internal/components"
 
 
 def linked_packages():

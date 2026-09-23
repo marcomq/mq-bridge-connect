@@ -76,11 +76,11 @@ async fn messages_cross_the_boundary_in_both_directions() {
     let port = free_port();
 
     let mut consumer = factory
-        .create_consumer("redpanda-round-trip", &listening(port))
+        .create_consumer("connect-round-trip", &listening(port))
         .await
         .expect("failed to create the consumer");
     let publisher = factory
-        .create_publisher("redpanda-round-trip", &connecting(port))
+        .create_publisher("connect-round-trip", &connecting(port))
         .await
         .expect("failed to create the publisher");
 
@@ -126,7 +126,7 @@ async fn a_configuration_that_owns_both_ends_is_rejected() {
     let factory = factory();
     let rejected = factory
         .create_consumer(
-            "redpanda-both-ends",
+            "connect-both-ends",
             &json!({ "yaml": "input:\n  generate:\n    mapping: root = \"x\"\noutput:\n  drop: {}\n" }),
         )
         .await;
@@ -142,7 +142,7 @@ async fn an_unknown_connector_fails_at_construction() {
     let factory = factory();
     let rejected = factory
         .create_consumer(
-            "redpanda-unknown",
+            "connect-unknown",
             &json!({ "connector": "not_a_connector" }),
         )
         .await;
@@ -180,7 +180,7 @@ async fn a_large_source_batch_is_split_and_then_the_stream_ends() {
 
     let factory = factory();
     let mut consumer = factory
-        .create_consumer("redpanda-split", &generating(TOTAL))
+        .create_consumer("connect-split", &generating(TOTAL))
         .await
         .expect("failed to create the consumer");
     consumer.set_exit_on_empty(true);
@@ -220,7 +220,7 @@ async fn a_large_source_batch_is_split_and_then_the_stream_ends() {
 async fn a_commit_with_the_wrong_number_of_dispositions_is_rejected() {
     let factory = factory();
     let mut consumer = factory
-        .create_consumer("redpanda-miscount", &generating(4))
+        .create_consumer("connect-miscount", &generating(4))
         .await
         .expect("failed to create the consumer");
 

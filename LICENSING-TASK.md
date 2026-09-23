@@ -124,7 +124,7 @@ it. That includes every channel:
   libraries, so a hand-copied deployment stays compliant
 
 mq-bridge now resolves a plugin by the endpoint name a route asks for — it looks
-for `libmq_bridge_redpanda.{so,dylib}` / `mq_bridge_redpanda.dll` on a search
+for `libmq_bridge_connect.{so,dylib}` / `mq_bridge_connect.dll` on a search
 path covering `MQB_PLUGIN_DIR`, the running binary's prefix, `$CONDA_PREFIX`,
 `$HOMEBREW_PREFIX` and `~/.local/share/mq-bridge/plugins`, under both
 `lib/mq-bridge` and plain `lib`. That makes a packaged install the expected way

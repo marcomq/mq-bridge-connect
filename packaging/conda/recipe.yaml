@@ -4,7 +4,7 @@ context:
   version: ${{ env.get("MQ_BRIDGE_PLUGIN_VERSION") }}
 
 package:
-  name: mq-bridge-redpanda
+  name: mq-bridge-connect
   version: ${{ version }}
 
 # Nothing is compiled here. `stage/` holds the prebuilt archive the release
@@ -30,33 +30,33 @@ build:
       - if: win
         then:
           - if not exist "%LIBRARY_BIN%" mkdir "%LIBRARY_BIN%"
-          - copy /Y mq_bridge_redpanda.dll "%LIBRARY_BIN%"
-          - copy /Y mq_bridge_redpanda_go.dll "%LIBRARY_BIN%"
+          - copy /Y mq_bridge_connect.dll "%LIBRARY_BIN%"
+          - copy /Y mq_bridge_connect_go.dll "%LIBRARY_BIN%"
         else:
           - mkdir -p "${PREFIX}/lib/mq-bridge"
-          - cp libmq_bridge_redpanda.* libmq_bridge_redpanda_go.* "${PREFIX}/lib/mq-bridge/"
+          - cp libmq_bridge_connect.* libmq_bridge_connect_go.* "${PREFIX}/lib/mq-bridge/"
 
 tests:
   - package_contents:
       files:
         - if: win
           then:
-            - Library/bin/mq_bridge_redpanda.dll
-            - Library/bin/mq_bridge_redpanda_go.dll
+            - Library/bin/mq_bridge_connect.dll
+            - Library/bin/mq_bridge_connect_go.dll
           else:
-            - lib/mq-bridge/libmq_bridge_redpanda.*
-            - lib/mq-bridge/libmq_bridge_redpanda_go.*
+            - lib/mq-bridge/libmq_bridge_connect.*
+            - lib/mq-bridge/libmq_bridge_connect_go.*
 
 about:
-  homepage: https://github.com/marcomq/mq-bridge-redpanda
-  repository: https://github.com/marcomq/mq-bridge-redpanda
+  homepage: https://github.com/marcomq/mq-bridge-connect
+  repository: https://github.com/marcomq/mq-bridge-connect
   documentation: https://marcomq.github.io/mq-bridge/
   summary: Unofficial Redpanda Connect compatibility plugin for mq-bridge
   description: |
     A loadable endpoint plugin that runs Redpanda Connect (Benthos) components
     inside mq-bridge. It is a pair of shared libraries, not a program: install
     them into the same environment as mq-bridge-app, or any environment whose
-    mq-bridge host searches this prefix, and routes can then use the `redpanda`
+    mq-bridge host searches this prefix, and routes can then use the `connect`
     endpoint.
 
     Unofficial: not affiliated with, endorsed by or supported by Redpanda

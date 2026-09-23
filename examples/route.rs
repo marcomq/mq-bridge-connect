@@ -9,7 +9,7 @@
 //! Nothing here needs a broker. Run it the same way as `quickstart`:
 //!
 //! ```text
-//! MQ_BRIDGE_REDPANDA_GO_LIBRARY=$PWD/target/debug/libmq_bridge_redpanda_go.dylib \
+//! MQ_BRIDGE_CONNECT_GO_LIBRARY=$PWD/target/debug/libmq_bridge_connect_go.dylib \
 //!     cargo run --example route
 //! ```
 
@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use mq_bridge::extensions::register_endpoint_factory;
 use mq_bridge::{stop_route, CanonicalMessage, Handled, Route};
-use mq_bridge_redpanda::RedpandaFactory;
+use mq_bridge_connect::ConnectFactory;
 use serde_json::json;
 
-const ROUTE: &str = "redpanda-demo";
+const ROUTE: &str = "connect-demo";
 const OUTPUT_PATH: &str = "target/route-example-output.jsonl";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -31,8 +31,8 @@ async fn main() -> anyhow::Result<()> {
     // Linking the crate lets you register the factory directly. A process that
     // did not compile it in loads the same code from the shared library with
     // `mq_bridge::plugin::load_endpoint_plugin`; both end up as the endpoint
-    // named `redpanda`, so the route config below is identical either way.
-    register_endpoint_factory("redpanda", Arc::new(RedpandaFactory::default()))?;
+    // named `connect`, so the route config below is identical either way.
+    register_endpoint_factory("connect", Arc::new(ConnectFactory::default()))?;
 
     let route: Route = serde_json::from_value(route_config())?;
     let route = route.with_handler(|mut message: CanonicalMessage| async move {
@@ -62,7 +62,7 @@ fn route_config() -> serde_json::Value {
             // Form A: `connector` names the Redpanda Connect component and the
             // remaining fields are that component's own configuration.
             "custom": {
-                "name": "redpanda",
+                "name": "connect",
                 "config": {
                     "connector": "generate",
                     "count": 10,
@@ -76,7 +76,7 @@ fn route_config() -> serde_json::Value {
             // that mq-bridge owns. Use it when you need processors, or any
             // stream-level field that form A cannot express.
             "custom": {
-                "name": "redpanda",
+                "name": "connect",
                 "config": {
                     // `max_in_flight` is the connector's own concurrency, not
                     // mq-bridge's: above 1 the sink may write out of source order.

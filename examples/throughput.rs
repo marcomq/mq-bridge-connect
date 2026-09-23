@@ -14,7 +14,7 @@ use anyhow::{bail, Context};
 use mq_bridge::errors::ConsumerError;
 use mq_bridge::traits::{CustomEndpointFactory, MessageDisposition};
 use mq_bridge::CanonicalMessage;
-use mq_bridge_redpanda::RedpandaFactory;
+use mq_bridge_connect::ConnectFactory;
 use serde_json::{json, Value};
 
 const PAYLOAD_BYTES: usize = 256;
@@ -32,7 +32,7 @@ struct Options {
 async fn main() -> anyhow::Result<()> {
     let options = parse_arguments()?;
     let payload = "x".repeat(PAYLOAD_BYTES);
-    let factory = RedpandaFactory::default();
+    let factory = ConnectFactory::default();
 
     let elapsed = match options.scenario.as_str() {
         "generate-consume" => consume(&factory, generated(&options, &payload), &options).await?,
@@ -97,7 +97,7 @@ fn write_file(options: &Options) -> anyhow::Result<Value> {
 }
 
 async fn consume(
-    factory: &RedpandaFactory,
+    factory: &ConnectFactory,
     config: Value,
     options: &Options,
 ) -> anyhow::Result<Duration> {
@@ -135,7 +135,7 @@ async fn consume(
 }
 
 async fn publish(
-    factory: &RedpandaFactory,
+    factory: &ConnectFactory,
     config: Value,
     options: &Options,
     payload: &str,

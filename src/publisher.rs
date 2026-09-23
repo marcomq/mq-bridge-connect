@@ -10,7 +10,7 @@ use crate::go_library::StreamKind;
 use crate::stream::GoStream;
 use crate::{config, wire};
 
-pub(crate) struct RedpandaPublisher {
+pub(crate) struct ConnectPublisher {
     stream: Arc<GoStream>,
 }
 
@@ -21,11 +21,11 @@ pub(crate) async fn create(
     let config = config::stream_config(config::Direction::Publisher, value)
         .map_err(|error| anyhow::Error::new(PublisherError::NonRetryable(error)))?;
     let stream = GoStream::open(go, StreamKind::Publisher, config).await?;
-    Ok(Box::new(RedpandaPublisher { stream }))
+    Ok(Box::new(ConnectPublisher { stream }))
 }
 
 #[async_trait]
-impl MessagePublisher for RedpandaPublisher {
+impl MessagePublisher for ConnectPublisher {
     fn on_disconnect_hook(&self) -> Option<BoxFuture<'_, anyhow::Result<()>>> {
         Some(Box::pin(async move { self.stream.close().await }))
     }
