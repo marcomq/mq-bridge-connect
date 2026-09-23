@@ -27,9 +27,8 @@ pub struct ConnectFactory {
 
 impl Default for ConnectFactory {
     fn default() -> Self {
-        let path = sibling::go_library_path().unwrap_or_else(|error| {
-            panic!("failed to resolve the Go sibling library: {error:#}")
-        });
+        let path = sibling::go_library_path()
+            .unwrap_or_else(|error| panic!("failed to resolve the Go sibling library: {error:#}"));
         let go = unsafe { GoLibrary::open(&path) }
             .and_then(|go| go.probe().map(|()| go).map_err(anyhow::Error::from))
             .unwrap_or_else(|error| panic!("failed to initialize {}: {error:#}", path.display()));

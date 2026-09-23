@@ -536,10 +536,7 @@ mod tests {
         assert_eq!(read["mqtt"]["urls"], json!(["tcp://localhost:1883"]));
         assert_eq!(read["mqtt"]["topics"], json!(["orders"]));
 
-        let write = component(
-            Direction::Publisher,
-            "connect+mqtt://localhost:1883/orders",
-        );
+        let write = component(Direction::Publisher, "connect+mqtt://localhost:1883/orders");
         assert_eq!(write["mqtt"]["urls"], json!(["tcp://localhost:1883"]));
         assert_eq!(write["mqtt"]["topic"], json!("orders"));
     }
