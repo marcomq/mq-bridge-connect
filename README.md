@@ -98,7 +98,7 @@ as indicative.
 
 **Do not use it for a Redpanda source into a Redpanda sink.** You would pay the
 consumer boundary
-([Throughput](#throughput-against-a-native-pipeline)), a 253 MiB library and a Go
+([Throughput](#throughput-against-a-native-pipeline)), a 218 MiB library and a Go
 runtime pinned in the process for its lifetime, and gain nothing at all. Run
 Redpanda Connect.
 
@@ -457,7 +457,7 @@ Three things follow.
 
 > **These figures predate the full allowlist.** They were measured against the
 > earlier three-package build (1 input, 2 outputs). Only two have been re-measured
-> against the full allowlist: the Go sibling is **253 MiB** release, and
+> against the full allowlist: the Go sibling is **218 MiB** release (stripped, macOS arm64), and
 > peak RSS is **113 MiB** — though that reading comes from the smoke test, which
 > does eight load/unload cycles, so it is not a steady-state number. Load time
 > and call latency have not been re-measured.

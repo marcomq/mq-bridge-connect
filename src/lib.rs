@@ -17,23 +17,33 @@ use std::sync::Arc;
 
 pub use go_library::{GoError, GoLibrary, ProbeError, StreamKind};
 
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use mq_bridge::errors::{ConsumerError, PublisherError};
 use mq_bridge::traits::{CustomEndpointFactory, MessageConsumer, MessagePublisher};
 
+/// A Go sibling that fails to load is reported by every endpoint the factory
+/// creates, not by a panic: `Default` has no other way to fail.
 #[derive(Debug)]
 pub struct ConnectFactory {
-    go: Arc<GoLibrary>,
+    go: Result<Arc<GoLibrary>, String>,
 }
 
 impl Default for ConnectFactory {
     fn default() -> Self {
-        let path = sibling::go_library_path()
-            .unwrap_or_else(|error| panic!("failed to resolve the Go sibling library: {error:#}"));
-        let go = unsafe { GoLibrary::open(&path) }
-            .and_then(|go| go.probe().map(|()| go).map_err(anyhow::Error::from))
-            .unwrap_or_else(|error| panic!("failed to initialize {}: {error:#}", path.display()));
-        Self { go: Arc::new(go) }
+        Self {
+            go: load_go_library()
+                .map(Arc::new)
+                .map_err(|error| format!("{error:#}")),
+        }
     }
+}
+
+fn load_go_library() -> anyhow::Result<GoLibrary> {
+    let path = sibling::go_library_path().context("failed to resolve the Go sibling library")?;
+    unsafe { GoLibrary::open(&path) }
+        .and_then(|go| go.probe().map(|()| go).map_err(anyhow::Error::from))
+        .with_context(|| format!("failed to initialize {}", path.display()))
 }
 
 #[async_trait]
@@ -47,9 +57,15 @@ impl CustomEndpointFactory for ConnectFactory {
         route_name: &str,
         config: &serde_json::Value,
     ) -> anyhow::Result<Box<dyn MessageConsumer>> {
-        consumer::create(Arc::clone(&self.go), config)
-            .await
-            .map_err(|error| route_context(route_name, "consumer", error))
+        let go = self
+            .go
+            .clone()
+            .map_err(|error| anyhow::Error::new(ConsumerError::Permanent(anyhow!(error))));
+        let created = match go {
+            Ok(go) => consumer::create(go, config).await,
+            Err(error) => Err(error),
+        };
+        created.map_err(|error| route_context(route_name, "consumer", error))
     }
 
     async fn create_publisher(
@@ -57,9 +73,15 @@ impl CustomEndpointFactory for ConnectFactory {
         route_name: &str,
         config: &serde_json::Value,
     ) -> anyhow::Result<Box<dyn MessagePublisher>> {
-        publisher::create(Arc::clone(&self.go), config)
-            .await
-            .map_err(|error| route_context(route_name, "publisher", error))
+        let go = self
+            .go
+            .clone()
+            .map_err(|error| anyhow::Error::new(PublisherError::NonRetryable(anyhow!(error))));
+        let created = match go {
+            Ok(go) => publisher::create(go, config).await,
+            Err(error) => Err(error),
+        };
+        created.map_err(|error| route_context(route_name, "publisher", error))
     }
 }
 
