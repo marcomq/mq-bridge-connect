@@ -11,3 +11,16 @@ __pycache__/
 /go-bridge/*.test
 /packaging/conda/stage/
 /packaging/conda/output/
+node/prebuilds/
+node/node_modules/
+node/THIRD_PARTY_NOTICES
+node/LICENSE-*
+python/dist/
+python/build/
+python/*.egg-info/
+python/THIRD_PARTY_NOTICES
+python/LICENSE-*
+python/mq_bridge_connect/*.so
+python/mq_bridge_connect/*.dylib
+python/mq_bridge_connect/*.dll
+node/checksums.json

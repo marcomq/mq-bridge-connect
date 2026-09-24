@@ -15,7 +15,15 @@ pub fn go_library_path() -> anyhow::Result<PathBuf> {
     let directory = plugin
         .parent()
         .context("the Rust plugin path has no parent directory")?;
-    Ok(directory.join(go_library_filename()))
+    let beside = directory.join(go_library_filename());
+    // Set by build.rs to the verified library of this exact crate build; the copy
+    // beside the executable may belong to another build sharing the target dir.
+    if let Some(built) = option_env!("MQ_BRIDGE_CONNECT_GO_BUILT").map(PathBuf::from) {
+        if built.exists() {
+            return Ok(built);
+        }
+    }
+    Ok(beside)
 }
 
 fn go_library_filename() -> &'static Path {

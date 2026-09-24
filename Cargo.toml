@@ -3,9 +3,10 @@ name = "mq-bridge-connect"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-publish = false
 description = "Unofficial Redpanda Connect compatibility plugin for mq-bridge"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/marcomq/mq-bridge-connect"
+exclude = [".github/", "node/", "python/", "packaging/"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]
@@ -27,6 +28,14 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
+[build-dependencies]
+flate2 = { version = "1.1", optional = true }
+sha2 = { version = "0.11", optional = true }
+tar = { version = "0.4", optional = true }
+ureq = { version = "3", optional = true }
+
 [features]
-default = ["plugin"]
+default = ["plugin", "download"]
 plugin = ["mq-bridge/plugin-sdk"]
+# Fetch the prebuilt Go library in a crates.io build; see build.rs.
+download = ["dep:flate2", "dep:sha2", "dep:tar", "dep:ureq"]

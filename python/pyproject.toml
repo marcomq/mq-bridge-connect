@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mq-bridge-connect"
+version = "0.1.0"
+description = "Unofficial Redpanda Connect compatibility plugin for mq-bridge"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+# Copied in from the repository root before building; see README.md.
+license-files = ["LICENSE-MIT", "LICENSE-APACHE", "THIRD_PARTY_NOTICES"]
+requires-python = ">=3.9"
+keywords = ["messaging", "redpanda-connect", "benthos", "mq-bridge", "etl"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Programming Language :: Go",
+    "Topic :: System :: Networking",
+]
+# Deliberately no dependency on mq-bridge: the two are installed and upgraded
+# independently, and `register()` reports a clear error if mq-bridge is absent.
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/marcomq/mq-bridge-connect"
+
+[tool.setuptools]
+# The wheel carries the prebuilt Rust plugin and its Go sibling, so it is
+# platform-specific; the release workflow applies the platform tag.
+packages = ["mq_bridge_connect"]
+
+[tool.setuptools.package-data]
+mq_bridge_connect = ["*.so", "*.dylib", "*.dll", "mq-bridge-plugin.json"]

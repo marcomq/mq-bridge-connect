@@ -121,6 +121,8 @@ Two artifacts ship together in one directory. The Rust plugin locates the Go
 sibling **relative to its own absolute path** ([`src/sibling.rs`](src/sibling.rs)),
 never via the working directory or the system library search path.
 `MQ_BRIDGE_CONNECT_GO_LIBRARY` overrides that with an absolute path, for tests.
+A crates.io build falls back to the copy its build script fetched
+([Install](#install)).
 
 The private Rust↔Go ABI ([`go-bridge/bridge.h`](go-bridge/bridge.h)) is versioned
 independently of mq-bridge's public plugin ABI: a `struct_size` plus
@@ -149,6 +151,39 @@ conda install -c marcomq mq-bridge-connect
 
 Either puts both libraries, and the third-party notices, where mq-bridge looks
 for them; a route can then name the `connect` endpoint with no further setup.
+
+For the Python and Node.js bindings of mq-bridge, call `register()` from the
+language package before starting routes:
+
+```console
+pip install mq-bridge mq-bridge-connect     # wheel includes both libraries
+npm install mq-bridge mq-bridge-connect     # downloads them on first use, see node/README.md
+```
+
+From Rust, depend on the crate and use `ConnectFactory` directly
+([`examples/quickstart.rs`](examples/quickstart.rs)):
+
+```console
+cargo add mq-bridge mq-bridge-connect
+```
+
+Cargo compiles only the Rust side. The build script downloads the Go library
+for the build target from this version's GitHub release, verifies it against
+the sha256 pinned in the published crate (a mismatch fails the build), and puts
+it next to the binaries, tests and examples under `target/`. `cargo run` and
+`cargo test` then work with no setup.
+
+- `MQ_BRIDGE_CONNECT_GO_LIBRARY=/abs/path/to/libmq_bridge_connect_go.so` uses
+  your own library instead: at build time it skips the download, at runtime it
+  overrides every other location. It is not checksummed.
+- `MQ_BRIDGE_CONNECT_DOWNLOAD_URL` fetches the archives from a mirror; the
+  checksum still applies.
+- `default-features = false, features = ["plugin"]` turns the download off.
+- Offline, the build succeeds with a warning; set the variable at runtime.
+
+To ship a program, copy `libmq_bridge_connect_go.*` (`mq_bridge_connect_go.dll`)
+from `target/<profile>/` next to the executable, together with
+`THIRD_PARTY_NOTICES` (in the crate and in every release archive).
 The release archives are the same files for a manual install — see
 [packaging/INSTALL.md](packaging/INSTALL.md).
 
