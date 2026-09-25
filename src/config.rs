@@ -325,7 +325,10 @@ fn place_uri_fields(
     // with no path may yield an empty topic. No component can use either.
     let non_empty = |value: Value| {
         let empty = value.as_str().is_some_and(|text| {
-            text.is_empty() || text.split_once("://").is_some_and(|(_, rest)| rest.is_empty())
+            text.is_empty()
+                || text
+                    .split_once("://")
+                    .is_some_and(|(_, rest)| rest.is_empty())
         });
         (!empty).then_some(value)
     };
