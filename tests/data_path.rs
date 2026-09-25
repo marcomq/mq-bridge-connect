@@ -241,3 +241,13 @@ async fn a_commit_with_the_wrong_number_of_dispositions_is_rejected() {
 
     consumer.close().await.expect("consumer close failed");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rejected_configuration_stops_the_route_instead_of_reconnecting() {
+    let factory = factory();
+    let consumer = factory.create_consumer("route", &json!({})).await;
+    let publisher = factory.create_publisher("route", &json!({})).await;
+    let is_invalid = |error: anyhow::Error| error.is::<mq_bridge::errors::InvalidConfig>();
+    assert!(consumer.err().is_some_and(is_invalid));
+    assert!(publisher.err().is_some_and(is_invalid));
+}

@@ -1,10 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use anyhow::bail;
 use async_trait::async_trait;
 use bytes::Bytes;
-use mq_bridge::errors::ConsumerError;
+use mq_bridge::errors::{ConsumerError, InvalidConfig};
 use mq_bridge::traits::{BatchCommitFunc, BoxFuture, MessageConsumer, MessageDisposition};
 use mq_bridge::ReceivedBatch;
 
@@ -26,8 +25,8 @@ pub(crate) async fn create(
     go: Arc<crate::GoLibrary>,
     value: &serde_json::Value,
 ) -> anyhow::Result<Box<dyn MessageConsumer>> {
-    let config = config::stream_config(config::Direction::Consumer, value)
-        .map_err(|error| anyhow::Error::new(ConsumerError::Permanent(error)))?;
+    let config =
+        config::stream_config(config::Direction::Consumer, value).map_err(InvalidConfig)?;
     let stream = GoStream::open(go, StreamKind::Consumer, config).await?;
     Ok(Box::new(ConnectConsumer {
         stream,
@@ -70,16 +69,9 @@ impl MessageConsumer for ConnectConsumer {
             return Ok(ReceivedBatch::empty());
         }
 
-        let expected = messages.len();
         let stream = Arc::clone(&self.stream);
         let commit: BatchCommitFunc = Box::new(move |dispositions| {
             Box::pin(async move {
-                if dispositions.len() != expected {
-                    bail!(
-                        "connect batch commit received {} dispositions for {expected} messages",
-                        dispositions.len()
-                    );
-                }
                 let encoded = dispositions.iter().map(disposition_byte).collect();
                 stream.commit(batch_id, encoded).await
             })

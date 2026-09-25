@@ -157,6 +157,32 @@ pub(crate) fn config_schema() -> Value {
     })
 }
 
+/// Whether a source built from `config` holds each message until mq-bridge
+/// commits it, so one lost in a crash is redelivered. `false` makes the route
+/// at-most-once (plugin ABI 1.2 asks this per config).
+///
+/// Form B is not parsed and keeps the default, as does any component not named.
+pub(crate) fn acknowledges(config: &Value) -> bool {
+    let Some(connector) = config.get("connector").and_then(Value::as_str) else {
+        return true;
+    };
+    // The `input` block wins over a top-level field, as in `synthesize`.
+    let field = |name: &str| {
+        config
+            .get("input")
+            .and_then(|input| input.get(name))
+            .or_else(|| config.get(name))
+    };
+    match connector.replace('-', "_").as_str() {
+        // `mqtt` leaves paho's auto-ack on, which acks on arrival whatever the
+        // QoS; `redis_list` pops before delivering; the rest have no ack at all.
+        "mqtt" | "nats" | "redis_pubsub" | "redis_list" | "socket" | "socket_server"
+        | "websocket" | "nanomsg" | "stdin" => false,
+        "amqp_0_9" => !field("auto_ack").and_then(Value::as_bool).unwrap_or(false),
+        _ => true,
+    }
+}
+
 fn raw_yaml(fields: &Map<String, Value>, yaml: &Value) -> Result<String> {
     let Value::String(yaml) = yaml else {
         bail!("`yaml` must be a string holding a Redpanda Connect configuration");
@@ -430,6 +456,45 @@ mod tests {
             serde_json::from_str(&stream_config(Direction::Publisher, &config).unwrap()).unwrap();
         assert!(publisher.get("output").is_some());
         assert!(publisher.get("input").is_none());
+    }
+
+    #[test]
+    fn sources_that_ack_on_arrival_are_at_most_once() {
+        for connector in [
+            "mqtt",
+            "nats",
+            "redis_pubsub",
+            "redis_list",
+            "redis-list",
+            "socket",
+            "socket_server",
+            "websocket",
+            "nanomsg",
+            "stdin",
+        ] {
+            let config = json!({ "connector": connector, "qos": 2 });
+            assert!(!acknowledges(&config), "{connector}");
+        }
+    }
+
+    #[test]
+    fn sources_that_wait_for_the_commit_acknowledge() {
+        for connector in ["amqp_1", "nats_jetstream", "pulsar", "redis_streams", "gcp_pubsub"] {
+            assert!(acknowledges(&json!({ "connector": connector })), "{connector}");
+        }
+        assert!(acknowledges(&json!({ "yaml": "input: { nats: {} }" })));
+    }
+
+    #[test]
+    fn amqp_0_9_acknowledges_unless_auto_ack_is_on() {
+        assert!(acknowledges(&json!({ "connector": "amqp_0_9" })));
+        assert!(!acknowledges(&json!({ "connector": "amqp_0_9", "auto_ack": true })));
+        assert!(!acknowledges(
+            &json!({ "connector": "amqp_0_9", "input": { "auto_ack": true } })
+        ));
+        assert!(acknowledges(
+            &json!({ "connector": "amqp_0_9", "auto_ack": true, "input": { "auto_ack": false } })
+        ));
     }
 
     #[test]

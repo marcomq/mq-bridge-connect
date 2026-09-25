@@ -577,9 +577,9 @@ dependencies = [
 
 [[package]]
 name = "mq-bridge"
-version = "0.4.13"
+version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75209554b0188c290902377efa61c0f708c5ba3713abd6f67d89e06f310226b1"
+checksum = "e538fd5d67adcfed313737d89f5d72aac5a0a04a330b7a70642e969a3b853f66"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -588,8 +588,10 @@ dependencies = [
  "bytes",
  "fast-uuid-v7",
  "futures",
+ "libc",
  "libloading",
  "memchr",
+ "object",
  "once_cell",
  "pidlock",
  "rand",
@@ -643,6 +645,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

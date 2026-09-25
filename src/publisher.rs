@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mq_bridge::errors::PublisherError;
+use mq_bridge::errors::{InvalidConfig, PublisherError};
 use mq_bridge::traits::{BoxFuture, MessagePublisher};
 use mq_bridge::{CanonicalMessage, SentBatch};
 
@@ -18,8 +18,8 @@ pub(crate) async fn create(
     go: Arc<crate::GoLibrary>,
     value: &serde_json::Value,
 ) -> anyhow::Result<Box<dyn MessagePublisher>> {
-    let config = config::stream_config(config::Direction::Publisher, value)
-        .map_err(|error| anyhow::Error::new(PublisherError::NonRetryable(error)))?;
+    let config =
+        config::stream_config(config::Direction::Publisher, value).map_err(InvalidConfig)?;
     let stream = GoStream::open(go, StreamKind::Publisher, config).await?;
     Ok(Box::new(ConnectPublisher { stream }))
 }

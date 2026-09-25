@@ -52,6 +52,10 @@ impl CustomEndpointFactory for ConnectFactory {
         Some(config::config_schema())
     }
 
+    fn acknowledges(&self, config: &serde_json::Value) -> bool {
+        config::acknowledges(config)
+    }
+
     async fn create_consumer(
         &self,
         route_name: &str,
