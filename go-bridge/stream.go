@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +45,11 @@ const pendingCapacity = 4096
 // handed over. Only ever adds latency to a batch that already has something in
 // it.
 const batchLinger = 5 * time.Millisecond
+
+// How long a publish waits for Benthos to confirm delivery. Benthos retries a
+// failing output internally and forever, so without a bound an unreachable sink
+// blocks the route and mq-bridge's retry and dlq middlewares never see a failure.
+const defaultPublishTimeout = 30 * time.Second
 
 var (
 	errEndOfStream = errors.New("stream ended")
@@ -142,8 +149,9 @@ type streamHandle struct {
 	runDone chan struct{}
 	runErr  error
 
-	pending chan *parkedBatch               // consumer streams only
-	produce service.MessageBatchHandlerFunc // publisher streams only
+	pending        chan *parkedBatch               // consumer streams only
+	produce        service.MessageBatchHandlerFunc // publisher streams only
+	publishTimeout time.Duration                   // publisher streams only; zero waits forever
 
 	// Source batches parked but not yet released. Once this reaches
 	// `maxInFlight` the source is blocked until mq-bridge commits.
@@ -248,11 +256,12 @@ func openStream(kind uint32, source string) (uint64, error) {
 	}
 
 	builder := service.NewStreamBuilder()
-	logger := config.logger
-	if logger == "" {
-		logger = "level: off"
-	}
-	if err := builder.SetLoggerYAML(logger); err != nil {
+	// Benthos's own default logs to stdout, which is where `mqb` may be writing
+	// messages. Warnings are what explain a sink that never confirms delivery.
+	if config.logger == "" {
+		builder.SetLogger(slog.New(slog.NewTextHandler(os.Stderr,
+			&slog.HandlerOptions{Level: slog.LevelWarn})))
+	} else if err := builder.SetLoggerYAML(config.logger); err != nil {
 		return 0, fmt.Errorf("invalid `logger`: %w", err)
 	}
 	if config.threads > 0 {
@@ -265,9 +274,10 @@ func openStream(kind uint32, source string) (uint64, error) {
 	}
 
 	handle := &streamHandle{
-		batches:     map[uint64][]handedRun{},
-		runDone:     make(chan struct{}),
-		maxInFlight: config.maxInFlight,
+		batches:        map[uint64][]handedRun{},
+		runDone:        make(chan struct{}),
+		maxInFlight:    config.maxInFlight,
+		publishTimeout: config.publishTimeout,
 	}
 	if kind == kindConsumer {
 		// Benthos never has more than `max_in_flight` batches written at once, so
@@ -484,10 +494,18 @@ func (h *streamHandle) publish(blob []byte) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	if err := h.produce(h.context, batch); err != nil {
-		return err
+	ctx := h.context
+	if h.publishTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, h.publishTimeout)
+		defer cancel()
 	}
-	return nil
+	err = h.produce(ctx, batch)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("delivery not confirmed within `publish_timeout` (%s); "+
+			"the output may still be retrying, and its warnings name the cause", h.publishTimeout)
+	}
+	return err
 }
 
 func (h *streamHandle) dropCarry(err error) {

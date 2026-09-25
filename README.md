@@ -27,19 +27,30 @@ its job. Redpanda supplies only the I/O components.
 > ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 > source message it belongs to.
 >
-> **The acceptance gate passes against five real brokers, in CI.**
-> `mq_bridge::plugin::conformance` ([`tests/conformance.rs`](tests/conformance.rs))
-> runs against a live beanstalkd, NATS JetStream and Redis on every push, each
-> held to what its transport actually guarantees:
+> **What has been tested.** Two sources: the acceptance gate
+> `mq_bridge::plugin::conformance` ([`tests/conformance.rs`](tests/conformance.rs)),
+> which runs against live brokers on every push in CI and holds each connector
+> to what its transport actually guarantees; and round trips run by hand with
+> the released 0.1.0 (Homebrew) and `mqb` 0.4.14 on macOS arm64, through
+> `mqb copy` and the mq-bridge MCP server, 20 messages each way with non-ASCII
+> payloads. The conformance suite also passes locally against those binaries.
 >
-> | Connector | Transport | Checks |
-> | :--- | :--- | :--- |
-> | `beanstalkd` | work queue | `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` |
-> | `nats_jetstream` | persistent stream | `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` |
-> | `amqp_0_9` | routed queue | `round_trip`, `metadata_preserved`, nack redelivery |
-> | `redis_streams` | consumer group | `round_trip`, `metadata_preserved`, nack redelivery |
-> | `mqtt` | QoS 1 topic | `round_trip`, nack redelivery |
-> | `redis_list` | work queue, no redelivery | `round_trip` |
+> | Connector | Conformance checks (CI) | Manual out / in | Metadata across the broker |
+> | :--- | :--- | :---: | :--- |
+> | `beanstalkd` | work queue: `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` | – | n/a (jobs carry none) |
+> | `nats_jetstream` | persistent stream: `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` | ✓ / ✓ | not sent unless the output's `metadata` filter is set |
+> | `amqp_0_9` (RabbitMQ 4.1) | routed queue: `round_trip`, `metadata_preserved`, nack redelivery | ✓ / ✓ | ✓ |
+> | `redis_streams` | consumer group: `round_trip`, `metadata_preserved`, nack redelivery | ✓ / ✓ | ✓ |
+> | `mqtt` (Mosquitto 2.0) | QoS 1 topic: `round_trip`, nack redelivery | ✓ / ✓ | – |
+> | `redis_list` | work queue, no redelivery: `round_trip` | – | – |
+> | `nats` (core) | – | ✓ / ✓ | as `nats_jetstream` |
+> | `redis_pubsub` | – | ✓ / ✓ | – |
+> | `amqp_1` (RabbitMQ 4.1) | – | ✓ / ✓ | no: RabbitMQ rejects plain annotation keys, so form A excludes all metadata by default (see [`amqp_1`](#connector-notes)) |
+> | `nsq` | – | ✓ / ✓ | – (no headers in NSQ) |
+> | `mongodb` | – | ✓ / ✓ | via `document_map` |
+> | `sql_insert` / `sql_select` (SQLite) | – | ✓ / ✓ | `@kind` usable in `args_mapping` |
+> | `file` | – | ✓ / ✓ | n/a; `pipeline.processors` ran in between |
+> | `generate` | – | – / ✓ | Bloblang `meta` reaches mq-bridge |
 >
 > Five independent transports now prove redelivery for real, rather than through
 > a scripted source: two return a message abandoned without an acknowledgement,
@@ -51,21 +62,22 @@ its job. Redpanda supplies only the I/O components.
 > **Linux and macOS both build, link and pass clippy** — the earlier link
 > failure is fixed and CI is green on both.
 >
-> **What still gates the next status, and why you should test first.** Six
-> connectors cover 12 of the 114 endpoint components, so the connector you are
-> about to use is still most likely one of the other 102. The risk is no longer
-> that this does not build — it is that your connector has never been run
-> against a live broker through this boundary. Run the conformance suite against
-> yours before you rely on it. Windows is documented but never built in CI.
+> **What still gates the next status, and why you should test first.** The
+> table covers 27 of the 114 endpoint components, six connectors of them in CI,
+> so the connector you are about to use may well be one of the other 87. The
+> risk is no longer that this does not build — it is that your connector has
+> never been run against a live broker through this boundary. Run the
+> conformance suite against yours before you rely on it. Windows is documented
+> but never built in CI.
 >
-> **Coverage is limited by the suite's shape, not by the connectors.** The
-> conformance suite shares one configuration between input and output, so it can
-> only address connectors whose two directions take the same fields. That
-> excludes `mqtt` (`topics` vs `topic`), `amqp_0_9` (`queue` vs `exchange`) and
-> `redis_streams` (`streams` vs `stream`), and it is why neither NATS connector
-> can be checked for metadata: the output's `metadata` filter would have to be
-> configured, and the input rejects a field it does not define. A
-> direction-aware configuration form would unlock all of them at once.
+> **The suite shares one configuration between input and output.** Connectors
+> whose directions take different fields — `mqtt` (`topics` vs `topic`),
+> `amqp_0_9` (`queue` vs `exchange`), `redis_streams` (`streams` vs `stream`) —
+> pass it through form A's `input`/`output` blocks. Neither NATS connector can
+> be checked for metadata there: the output's `metadata` filter would have to
+> be configured, and the input rejects a field it does not define. Core `nats`
+> is left out of the suite because it drops anything published before the
+> subscription exists; it was verified by hand instead.
 >
 > What *is* verified: 14 Go tests (race-clean) and 21 Rust tests, covering
 > acknowledgement granularity, batch splitting and aggregation, release-once
@@ -256,6 +268,19 @@ The JetStream test takes about 30s: an uncommitted batch only returns once
 `ack_wait` expires, and that is an input-only field the shared config cannot
 shorten.
 
+### Versioning
+
+`Cargo.toml` is the source of truth for the package version. Update every
+ecosystem manifest together before tagging a release:
+
+```console
+python3 scripts/set_version.py 0.1.1
+```
+
+`python3 scripts/set_version.py --check` verifies that the Cargo, npm and Python
+versions match. The [release workflow](.github/workflows/release.yml) runs that
+check and also requires the tag to match the version.
+
 ## Examples
 
 Four ways to drive the same connector, in [`examples/`](examples/), plus the
@@ -341,6 +366,9 @@ A block is optional, and a field inside one overrides the same field outside it
 disconnects the older session when two clients present the same one. A connector
 that genuinely has a field called `input` or `output` needs form B.
 
+`publish_timeout` and `logger` are settings of the stream, not of the
+component, and form A moves them to the top level of the document (see below).
+
 **From a URI.** The scheme names the component after a `+`, the spelling
 `git+ssh://` and `postgresql+psycopg2://` made familiar, and the rest of the URI
 is read as that component's:
@@ -362,9 +390,13 @@ into whichever field the component names it by, in this direction:
 | `pulsar` | `url: pulsar://…` | `topics` | `topic` |
 | `redis_streams` | `url: redis://…` | `streams` | `stream` |
 | `redis_pubsub` | `url: redis://…` | `channels` | `channel` |
+| `redis_list` | `url: redis://…` | `key` | `key` |
 
 Every other field is a query parameter, and any field given by its own name wins
-over what the URI would have filled. A component outside the table is configured
+over what the URI would have filled. A query value arrives as a string; one given
+to a field the component declares as a bool or a number is converted, so
+`?start_from_oldest=true` works. A URI with no authority, such as
+`connect+generate://?count=100`, sets no address. A component outside the table is configured
 by its own field names, and keeps `address` and `topic` as its own — `beanstalkd`
 takes an address and `nsq` a topic, so translating them there would break a
 configuration that works today.
@@ -384,8 +416,8 @@ This is the form to reach for if you already know Redpanda Connect.
 ```
 
 Form B accepts `input` or `output` (whichever this endpoint owns), `pipeline`
-with `threads` and `processors`, `logger`, the three `*_resources` sections, and
-`max_in_flight`. Any other top-level key is an error naming what is accepted —
+with `threads` and `processors`, `logger`, the three `*_resources` sections,
+`max_in_flight` and, for an output, `publish_timeout`. Any other top-level key is an error naming what is accepted —
 an ignored key would be configuration the user believes is in effect.
 
 `max_in_flight` (default 64) is how many source **batches** may sit
@@ -399,6 +431,34 @@ a message at a time — `file` does, without a `batching` policy — is held to 
 messages in flight and loses about a fifth of its throughput to the round trip.
 Raise it for those, and see
 [Throughput](#throughput-against-a-native-pipeline) for what it recovers.
+A `file` source that has to keep its line order needs `max_in_flight: 1` instead.
+
+`publish_timeout` (default `30s`, output only) bounds how long a send waits for
+the component to confirm delivery. Benthos retries a failing output internally
+and indefinitely — an unreachable broker, or one that rejects the message — so
+without a bound the route would block forever and look healthy. When it elapses
+the send fails as retryable, so mq-bridge's `retry` and `dlq` middlewares take
+over. Benthos may still deliver the timed-out batch later, so a retry can
+duplicate it. `0s` waits forever.
+
+**Logging.** Without a `logger` block, Benthos warnings and errors go to
+stderr — they are what name the cause of a send that never completes, such as
+`connection refused`. A `logger` block replaces that with Benthos's own logger,
+which writes to stdout unless it is given a `file`; `logger: { level: off }`
+silences it.
+
+### Connector notes
+
+* **`amqp_1`.** Benthos writes metadata as AMQP message annotations, and AMQP
+  1.0 reserves every annotation key without an `x-` prefix. RabbitMQ 4.x
+  enforces that by dropping the connection. Form A therefore defaults an
+  `amqp_1` output to `metadata: { exclude_prefixes: [""] }`; set `metadata`
+  yourself to change it, and in form B set it yourself. `application_properties_map`
+  can carry fields, but the `amqp_1` input does not turn application properties
+  back into metadata.
+* **`nats_jetstream`, `amqp_0_9`.** Benthos does not create streams or queues.
+  An AMQP 0.9 publish to a queue that does not exist is dropped by the broker
+  without an error.
 
 ### Schema and validation
 
@@ -644,25 +704,23 @@ Register signal handlers first — e.g. `tokio::signal::unix::signal(...)` for
 SIGINT and SIGTERM — then load the plugin. `mqb` does this before loading
 plugins.
 
-### One broker connector has been run
+### Most connectors have never been run
 
 The data path is exercised by [`tests/data_path.rs`](tests/data_path.rs)
 (`socket_server` / `socket` over loopback TCP) and by the Go tests in
 [`go-bridge/stream_test.go`](go-bridge/stream_test.go), which drive
-acknowledgement through the same code the ABI calls. Beyond that only
-`beanstalkd` has faced a real broker, through the conformance suite below.
-Nothing has been run against Kafka, MQTT or S3, and connector-specific
-behaviour — authentication, partitioning, redelivery timing — is unverified for
-every connector but that one.
+acknowledgement through the same code the ABI calls. Against real brokers,
+only the connectors in the "What has been tested" table at the top have been
+run: six through the conformance suite in CI, the rest by hand. Nothing has been run against
+S3, Pulsar or the cloud and database connectors beyond SQLite and MongoDB, and
+connector-specific behaviour — authentication, partitioning, redelivery
+timing — is unverified outside those runs.
 
 `mq_bridge::plugin::conformance` is the acceptance gate, and it passes as
-[`tests/conformance.rs`](tests/conformance.rs). It shares one configuration
-between input and output, so it needs a connector whose two directions take the
-same fields: `beanstalkd` takes only `address` and genuinely redelivers what a
-consumer rejects. Three of the four checks apply — `metadata_preserved` does
-not, because a beanstalkd job carries no metadata to preserve. It runs in CI
-against a broker container, and skips locally unless
-`MQ_BRIDGE_CONNECT_BEANSTALKD` is set.
+[`tests/conformance.rs`](tests/conformance.rs), each connector held to the
+checks its transport supports. It runs in CI against broker containers; locally
+each test skips unless its broker's environment variable is set
+(`MQ_BRIDGE_CONNECT_BEANSTALKD`, `…_NATS`, `…_REDIS`, `…_AMQP`, `…_MQTT`).
 
 Deployment also requires **two files in the same directory**. The Rust plugin
 resolves its sibling from its own absolute path, so this is robust, but it does
@@ -675,6 +733,13 @@ notices. Release archives ship the notices and both license files alongside the
 libraries — keep the directory together, and if you repackage the libraries into
 an image, a formula or a package, install the notices there too. See
 [`packaging/INSTALL.md`](packaging/INSTALL.md).
+
+### The first route can outlast a 5 s startup timeout
+
+The Go library is ~218 MB and is loaded when the first `connect` endpoint is
+created, not when the host starts. A route started over the mq-bridge MCP server
+right after it starts can miss the default `startup_timeout_ms` of 5000; give the
+first one `startup_timeout_ms: 30000`. Later routes start quickly.
 
 ### Crash isolation
 
@@ -702,6 +767,8 @@ Connect gives real isolation.
   pipelining that overlaps mq-bridge's work with the source's.
 * **`Reply` is not supported.** A Benthos source has nowhere to put a reply, so
   `MessageDisposition::Reply` acknowledges and the reply payload is dropped.
+* **A send is bounded by `publish_timeout`.** A send the output never confirms
+  fails as retryable after it, and may still be delivered later.
 * **Whole-batch output results.** Redpanda `BatchError` can report partial
   success; plugin ABI v1 reports a publish batch all-or-nothing. A publish call
   returns only once Benthos has delivered the whole batch, so success means

@@ -139,6 +139,19 @@ pub(crate) fn config_schema() -> Value {
                 "title": "Sink-only fields",
                 "description": "What the component takes when it writes. The other direction's \
                                 block is dropped."
+            },
+            "publish_timeout": {
+                "type": "string",
+                "title": "Publish timeout",
+                "description": "How long a sink waits for the component to confirm delivery \
+                                before the send fails as retryable, such as `30s` (the \
+                                default). `0s` waits forever."
+            },
+            "logger": {
+                "type": "object",
+                "title": "Benthos logger",
+                "description": "A Redpanda Connect `logger` block. Without one, warnings and \
+                                errors go to stderr."
             }
         }
     })
@@ -190,9 +203,27 @@ fn synthesize(
         component.insert(key, value);
     }
 
-    let document = serde_json::json!({
-        direction.section(): { connector: Value::Object(component) },
-    });
+    // AMQP 1.0 reserves every annotation key without an `x-` prefix, and
+    // RabbitMQ enforces that by dropping the connection. Benthos writes all
+    // metadata as annotations, and every mq-bridge message carries some.
+    if connector == "amqp_1" && direction == Direction::Publisher {
+        component
+            .entry("metadata")
+            .or_insert_with(|| serde_json::json!({ "exclude_prefixes": [""] }));
+    }
+
+    // Settings of the stream rather than of the component, so they move up to
+    // the top level of the document.
+    let mut document = Map::new();
+    for key in ["publish_timeout", "logger"] {
+        if let Some(value) = component.remove(key) {
+            document.insert(key.into(), value);
+        }
+    }
+    document.insert(
+        direction.section().into(),
+        serde_json::json!({ connector: Value::Object(component) }),
+    );
     serde_json::to_string(&document).map_err(|error| anyhow!("{error}"))
 }
 
@@ -264,6 +295,12 @@ fn uri_fields(connector: &str) -> Option<UriFields> {
             consumer: &[List("streams")],
             publisher: &[Scalar("stream")],
         },
+        "redis_list" => UriFields {
+            scheme: "redis",
+            address: Scalar("url"),
+            consumer: &[Scalar("key")],
+            publisher: &[Scalar("key")],
+        },
         "redis_pubsub" => UriFields {
             scheme: "redis",
             address: Scalar("url"),
@@ -284,8 +321,16 @@ fn place_uri_fields(
     connector: &str,
     component: &mut Map<String, Value>,
 ) -> Result<()> {
-    let address = component.remove("address");
-    let topic = component.remove("topic");
+    // A URI with no authority still yields an address, `generate://`, and one
+    // with no path may yield an empty topic. No component can use either.
+    let non_empty = |value: Value| {
+        let empty = value.as_str().is_some_and(|text| {
+            text.is_empty() || text.split_once("://").is_some_and(|(_, rest)| rest.is_empty())
+        });
+        (!empty).then_some(value)
+    };
+    let address = component.remove("address").and_then(non_empty);
+    let topic = component.remove("topic").and_then(non_empty);
     if address.is_none() && topic.is_none() {
         return Ok(());
     }
@@ -578,6 +623,61 @@ mod tests {
             json!(["tcp://elsewhere:1883"])
         );
         assert_eq!(document["input"]["mqtt"]["topics"], json!(["orders"]));
+    }
+
+    #[test]
+    fn a_uri_without_an_authority_adds_no_address() {
+        let read = component(Direction::Consumer, "connect+generate://?count=100");
+        assert!(read["generate"].get("address").is_none(), "{read}");
+        assert!(read["generate"].get("topic").is_none(), "{read}");
+    }
+
+    #[test]
+    fn a_redis_list_uri_names_its_url_and_key() {
+        for direction in [Direction::Consumer, Direction::Publisher] {
+            let end = component(direction, "connect+redis-list://127.0.0.1:6379/jobs");
+            assert_eq!(end["redis_list"]["url"], json!("redis://127.0.0.1:6379"));
+            assert_eq!(end["redis_list"]["key"], json!("jobs"));
+            assert!(end["redis_list"].get("address").is_none());
+        }
+    }
+
+    #[test]
+    fn an_amqp_1_sink_leaves_metadata_out_of_the_annotations_unless_told_otherwise() {
+        let write = component(Direction::Publisher, "connect+amqp-1://localhost:5672/q");
+        assert_eq!(
+            write["amqp_1"]["metadata"],
+            json!({ "exclude_prefixes": [""] })
+        );
+
+        let read = component(Direction::Consumer, "connect+amqp-1://localhost:5672/q");
+        assert!(read["amqp_1"].get("metadata").is_none());
+
+        let config = json!({
+            "connector": "amqp_1",
+            "metadata": { "exclude_prefixes": ["secret_"] },
+        });
+        let document: Value =
+            serde_json::from_str(&stream_config(Direction::Publisher, &config).unwrap()).unwrap();
+        assert_eq!(
+            document["output"]["amqp_1"]["metadata"],
+            json!({ "exclude_prefixes": ["secret_"] })
+        );
+    }
+
+    #[test]
+    fn stream_settings_move_out_of_the_component() {
+        let config = json!({
+            "connector": "mqtt",
+            "logger": { "level": "debug" },
+            "output": { "publish_timeout": "5s" },
+        });
+        let document: Value =
+            serde_json::from_str(&stream_config(Direction::Publisher, &config).unwrap()).unwrap();
+        assert_eq!(document["publish_timeout"], json!("5s"));
+        assert_eq!(document["logger"], json!({ "level": "debug" }));
+        assert!(document["output"]["mqtt"].get("publish_timeout").is_none());
+        assert!(document["output"]["mqtt"].get("logger").is_none());
     }
 
     /// `address` and `topic` are fields components have themselves --

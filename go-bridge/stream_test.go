@@ -200,6 +200,10 @@ func TestParseStreamConfigRejectsTheEndMqBridgeOwns(t *testing.T) {
 		{"consumer with no input", kindConsumer, "pipeline:\n  processors: []\n", "must declare `input`"},
 		{"publisher with no output", kindPublisher, "pipeline:\n  processors: []\n", "must declare `output`"},
 		{"unsupported key", kindConsumer, "input:\n  generate: {}\nbuffer:\n  memory: {}\n", "unsupported top-level key"},
+		{"publish_timeout on an input", kindConsumer,
+			"input:\n  generate: {}\npublish_timeout: 1s\n", "only to an output"},
+		{"publish_timeout that is not a duration", kindPublisher,
+			"output:\n  drop: {}\npublish_timeout: soon\n", "must be a duration"},
 		{"empty", kindConsumer, "", "empty"},
 		{"not YAML", kindConsumer, "\tnot: [valid", "not valid YAML"},
 	}
@@ -235,6 +239,24 @@ func TestParseStreamConfigKeepsEachSection(t *testing.T) {
 	}
 	if !strings.Contains(config.resources, "cache_resources") {
 		t.Errorf("resources lost: %q", config.resources)
+	}
+}
+
+// Form A arrives as JSON, and a URI's query values in it are always strings.
+func TestAStringGivenToABoolOrNumberFieldTakesTheFieldsType(t *testing.T) {
+	config, err := parseStreamConfig(kindConsumer, `{"input":{"redis_streams":{`+
+		`"url":"redis://localhost:6379","streams":["s"],`+
+		`"start_from_oldest":"true","limit":"25","body_key":"true"}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{`"start_from_oldest": true`, `"limit": 25`, `"body_key": "true"`} {
+		if !strings.Contains(config.input, want) {
+			t.Errorf("input section lacks %q: %q", want, config.input)
+		}
+	}
+	if err := service.NewStreamBuilder().AddInputYAML(config.input); err != nil {
+		t.Errorf("Benthos rejected the coerced section: %v", err)
 	}
 }
 
@@ -705,6 +727,53 @@ func TestPublishDeliversPayloadAndMetadata(t *testing.T) {
 	}
 	if origin, _ := sink.received[0].MetaGet("origin"); origin != "mq-bridge" {
 		t.Errorf("delivered metadata origin %q, want %q", origin, "mq-bridge")
+	}
+}
+
+// An output that never confirms, the way Benthos behaves while it retries an
+// unreachable broker.
+type stuckSink struct{}
+
+func (stuckSink) Connect(context.Context) error { return nil }
+func (stuckSink) Close(context.Context) error   { return nil }
+
+func (stuckSink) WriteBatch(ctx context.Context, _ service.MessageBatch) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestAPublishTheOutputNeverConfirmsFailsAfterPublishTimeout(t *testing.T) {
+	err := service.RegisterBatchOutput("mqbrp_test_stuck", service.NewConfigSpec(),
+		func(*service.ParsedConfig, *service.Resources) (service.BatchOutput, service.BatchPolicy, int, error) {
+			return stuckSink{}, service.BatchPolicy{}, 1, nil
+		})
+	if err != nil {
+		t.Fatalf("failed to register the stuck sink: %v", err)
+	}
+	id, err := openStream(kindPublisher, "publish_timeout: 200ms\noutput:\n  mqbrp_test_stuck: {}\n")
+	if err != nil {
+		t.Fatalf("failed to open the stream: %v", err)
+	}
+	handle, err := lookupStream(id)
+	if err != nil {
+		t.Fatalf("the stream was not registered: %v", err)
+	}
+	defer func() { _ = handle.close(time.Second) }()
+
+	blob, err := encodeRuns([]handedRun{{
+		parked: &parkedBatch{batch: service.MessageBatch{service.NewMessage([]byte("x"))}},
+		start:  0, count: 1,
+	}}, 1, 0)
+	if err != nil {
+		t.Fatalf("failed to encode the batch: %v", err)
+	}
+	started := time.Now()
+	err = handle.publish(blob)
+	if err == nil || !strings.Contains(err.Error(), "publish_timeout") {
+		t.Fatalf("expected a publish_timeout error, got %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Errorf("publish returned after %s, long past its 200ms timeout", elapsed)
 	}
 }
 

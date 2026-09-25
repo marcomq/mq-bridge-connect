@@ -1,6 +1,6 @@
 [package]
 name = "mq-bridge-connect"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Unofficial Redpanda Connect compatibility plugin for mq-bridge"
