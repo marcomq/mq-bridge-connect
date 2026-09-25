@@ -492,7 +492,7 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 PART B — Rust cdylib (libmq_bridge_connect)
 ================================================================================
 
-131 Rust crates are linked, using each crate's declared SPDX
+132 Rust crates are linked, using each crate's declared SPDX
 expression. Where an expression offers a choice (`MIT OR Apache-2.0`), this
 distribution takes no position; recipients may select either arm, and the text
 of each arm is cited.
@@ -502,7 +502,7 @@ of each arm is cited.
 - 68 × MIT OR Apache-2.0
 - 18 × MIT
 - 18 × Unicode-3.0
-- 12 × Apache-2.0 OR MIT
+- 13 × Apache-2.0 OR MIT
 - 3 × ISC
 - 2 × Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 - 1 × 0BSD OR MIT OR Apache-2.0
@@ -577,9 +577,10 @@ of each arm is cited.
 - `memchr` 2.8.3 — Unlicense OR MIT [L079] — Copyright (c) 2015 Andrew Gallant
 - `miniz_oxide` 0.9.1 — MIT OR Zlib OR Apache-2.0 [L082] [L016] [L082] — Copyright 2013-2014 RAD Game Tools and Valve Software
 - `mio` 1.2.3 — MIT [L080] — Copyright (c) 2014 Carl Lerche and other MIO contributors
-- `mq-bridge` 0.4.13 — MIT OR Apache-2.0 [L027] [L003] [L082] — Copyright (c) 2025 Marco Mengelkoch
+- `mq-bridge` 0.4.15 — MIT OR Apache-2.0 [L027] [L003] [L082] — Copyright (c) 2025 Marco Mengelkoch
 - `nix` 0.30.1 — MIT [L079] — Copyright (c) 2015 Carl Lerche + nix-rust Authors
 - `num-traits` 0.2.19 — MIT OR Apache-2.0 [L003] [L073] — Copyright (c) 2014 The Rust Project Developers
+- `object` 0.39.1 — Apache-2.0 OR MIT [L003] [L073] — Copyright (c) 2015 The Gimli Developers
 - `once_cell` 1.21.4 — MIT OR Apache-2.0 [L003] [L073]
 - `parking` 2.2.1 — Apache-2.0 OR MIT [L003] [L073] [L028]
 - `percent-encoding` 2.3.2 — MIT OR Apache-2.0 [L003] [L073] — Copyright (c) 2013-2025 The rust-url developers
@@ -8944,7 +8945,7 @@ Software.
 
 
 --------------------------------------------------------------------------------
-[L027] Apache-2.0 — as distributed with mq-bridge 0.4.13
+[L027] Apache-2.0 — as distributed with mq-bridge 0.4.15
 --------------------------------------------------------------------------------
 
 mq-bridge is dual-licensed under either of
