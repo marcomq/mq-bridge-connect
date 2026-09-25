@@ -479,8 +479,17 @@ mod tests {
 
     #[test]
     fn sources_that_wait_for_the_commit_acknowledge() {
-        for connector in ["amqp_1", "nats_jetstream", "pulsar", "redis_streams", "gcp_pubsub"] {
-            assert!(acknowledges(&json!({ "connector": connector })), "{connector}");
+        for connector in [
+            "amqp_1",
+            "nats_jetstream",
+            "pulsar",
+            "redis_streams",
+            "gcp_pubsub",
+        ] {
+            assert!(
+                acknowledges(&json!({ "connector": connector })),
+                "{connector}"
+            );
         }
         assert!(acknowledges(&json!({ "yaml": "input: { nats: {} }" })));
     }
@@ -488,7 +497,9 @@ mod tests {
     #[test]
     fn amqp_0_9_acknowledges_unless_auto_ack_is_on() {
         assert!(acknowledges(&json!({ "connector": "amqp_0_9" })));
-        assert!(!acknowledges(&json!({ "connector": "amqp_0_9", "auto_ack": true })));
+        assert!(!acknowledges(
+            &json!({ "connector": "amqp_0_9", "auto_ack": true })
+        ));
         assert!(!acknowledges(
             &json!({ "connector": "amqp_0_9", "input": { "auto_ack": true } })
         ));
