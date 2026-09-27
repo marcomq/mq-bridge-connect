@@ -3,6 +3,7 @@ module github.com/marcomq/mq-bridge-connect/go-bridge
 go 1.26.6
 
 require (
+	github.com/goccy/go-json v0.10.6
 	github.com/redpanda-data/benthos/v4 v4.80.0
 	github.com/redpanda-data/connect/v4 v4.110.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -155,7 +156,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/go-sql-driver/mysql v1.10.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/gocql/gocql v1.7.0 // indirect
 	github.com/godbus/dbus v0.0.0-20190726142602-4481cbc300e2 // indirect
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect

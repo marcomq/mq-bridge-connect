@@ -109,6 +109,11 @@ func appendMessage(buffer []byte, message *service.Message) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read message payload: %w", err)
 	}
+	return appendMessagePayload(buffer, message, payload)
+}
+
+// Encodes a message with the given payload in place of its own.
+func appendMessagePayload(buffer []byte, message *service.Message, payload []byte) ([]byte, error) {
 	buffer = appendBytes(buffer, payload)
 
 	// The count is only known once the walk is over, so reserve its four bytes

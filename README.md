@@ -21,69 +21,13 @@ its job. Redpanda supplies only the I/O components.
 
 > ## ⚠️ Status: early — perform your own testing before you deploy
 >
-> **Messages cross the boundary in both directions**, at 1.83M msg/s in and
-> 3.66M out. A `connect` input consumes through a Redpanda Connect connector and
-> a `connect` output publishes through one; payloads and metadata survive both
-> ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
-> source message it belongs to.
->
-> **What has been tested.** Two sources: the acceptance gate
-> `mq_bridge::plugin::conformance` ([`tests/conformance.rs`](tests/conformance.rs)),
-> which runs against live brokers on every push in CI and holds each connector
-> to what its transport actually guarantees; and round trips run by hand with
-> the released 0.1.0 (Homebrew) and `mqb` 0.4.14 on macOS arm64, through
-> `mqb copy` and the mq-bridge MCP server, 20 messages each way with non-ASCII
-> payloads. The conformance suite also passes locally against those binaries.
->
-> | Connector | Conformance checks (CI) | Manual out / in | Metadata across the broker |
-> | :--- | :--- | :---: | :--- |
-> | `beanstalkd` | work queue: `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` | – | n/a (jobs carry none) |
-> | `nats_jetstream` | persistent stream: `round_trip`, `nack_redelivers`, `uncommitted_batch_redelivers` | ✓ / ✓ | not sent unless the output's `metadata` filter is set |
-> | `amqp_0_9` (RabbitMQ 4.1) | routed queue: `round_trip`, `metadata_preserved`, nack redelivery | ✓ / ✓ | ✓ |
-> | `redis_streams` | consumer group: `round_trip`, `metadata_preserved`, nack redelivery | ✓ / ✓ | ✓ |
-> | `mqtt` (Mosquitto 2.0) | QoS 1 topic: `round_trip`, nack redelivery | ✓ / ✓ | – |
-> | `redis_list` | work queue, no redelivery: `round_trip` | – | – |
-> | `nats` (core) | – | ✓ / ✓ | as `nats_jetstream` |
-> | `redis_pubsub` | – | ✓ / ✓ | – |
-> | `amqp_1` (RabbitMQ 4.1) | – | ✓ / ✓ | no: RabbitMQ rejects plain annotation keys, so form A excludes all metadata by default (see [`amqp_1`](#connector-notes)) |
-> | `nsq` | – | ✓ / ✓ | – (no headers in NSQ) |
-> | `mongodb` | – | ✓ / ✓ | via `document_map` |
-> | `sql_insert` / `sql_select` (SQLite) | – | ✓ / ✓ | `@kind` usable in `args_mapping` |
-> | `file` | – | ✓ / ✓ | n/a; `pipeline.processors` ran in between |
-> | `generate` | – | – / ✓ | Bloblang `meta` reaches mq-bridge |
->
-> Five independent transports now prove redelivery for real, rather than through
-> a scripted source: two return a message abandoned without an acknowledgement,
-> and three return one that was explicitly rejected. A missing broker is a hard
-> failure under CI, so the gate cannot quietly degrade into a skip, and each
-> test asserts the exact set of checks its transport supports — a check that
-> stops applying fails rather than vanishing.
->
-> **Linux and macOS both build, link and pass clippy** — the earlier link
-> failure is fixed and CI is green on both.
->
-> **What still gates the next status, and why you should test first.** The
-> table covers 27 of the 114 endpoint components, six connectors of them in CI,
-> so the connector you are about to use may well be one of the other 87. The
-> risk is no longer that this does not build — it is that your connector has
-> never been run against a live broker through this boundary. Run the
-> conformance suite against yours before you rely on it. Windows is documented
-> but never built in CI.
->
-> **The suite shares one configuration between input and output.** Connectors
-> whose directions take different fields — `mqtt` (`topics` vs `topic`),
-> `amqp_0_9` (`queue` vs `exchange`), `redis_streams` (`streams` vs `stream`) —
-> pass it through form A's `input`/`output` blocks. Neither NATS connector can
-> be checked for metadata there: the output's `metadata` filter would have to
-> be configured, and the input rejects a field it does not define. Core `nats`
-> is left out of the suite because it drops anything published before the
-> subscription exists; it was verified by hand instead.
->
-> What *is* verified: 14 Go tests (race-clean) and 21 Rust tests, covering
-> acknowledgement granularity, batch splitting and aggregation, release-once
-> semantics, the wire format, configuration, and `socket_server` / `socket` over
-> loopback TCP. The loader contract holds across 150 consecutive
-> load/probe/panic-recovery cycles.
+> Messages cross the boundary in both directions, payloads and metadata survive
+> both ways, and an mq-bridge nack rejects the one source message it belongs to.
+> Six connectors run against live brokers in CI and about a dozen more have been
+> round-tripped by hand — 27 of the 114 endpoint components in all. The one you
+> are about to use may well be among the other 87: run the conformance suite
+> against it before you rely on it. See [docs/TESTING.md](docs/TESTING.md) for
+> exactly what has been tested and how.
 
 ## When this is worth it
 
@@ -95,62 +39,26 @@ has no connector for, plus mq-bridge's own route model — retry, DLQ,
 deduplication, encryption, transform, switch, observability — over sinks that
 never had it.
 
-**Speed can be, too, where mq-bridge owns the faster end.** Reading a local file,
-mq-bridge moves **694 773 msg/s** against Redpanda Connect's **238 851 msg/s**
-for the same 200 000 lines, and the boundary into a Redpanda sink is free
-(`mq-bridge → file` measured 182 165 msg/s against 171 996 native). So a
-`file → <connect sink>` route through mq-bridge beats the same route inside
-Redpanda Connect whenever the sink can absorb more than 239k/s; when the sink is
-the bottleneck it is a wash, never a loss. That is **one connector on one
-workload, measured with two different harnesses** — a reason to measure your own
-pair, not a general claim that either tool is faster. The Redpanda figures are
-from the run in [Throughput](#throughput-against-a-native-pipeline); the
-mq-bridge one predates it and was not re-measured alongside, so treat the ratio
-as indicative.
+**The boundary is not what limits a route.** Through `mqb`, a file of short JSON
+lines drains into a Redpanda sink at **3.25M rows/s** and a Redpanda source feeds a file at **1.94M rows/s**
+([Performance](docs/PERFORMANCE.md)); what limits a route is the connector at the
+other end. A Redpanda processor as a middleware is a different matter: it is
+priced by the processor, 270k–540k rows/s for a Bloblang mapping on one worker.
 
 **Do not use it for a Redpanda source into a Redpanda sink.** You would pay the
 consumer boundary
-([Throughput](#throughput-against-a-native-pipeline)), a 218 MiB library and a Go
+([Performance](docs/PERFORMANCE.md)), a 218 MiB library and a Go
 runtime pinned in the process for its lifetime, and gain nothing at all. Run
 Redpanda Connect.
 
-## Architecture
+## How it works
 
-```text
-mq-bridge
-  └─ native plugin ABI 1.1
-      └─ Rust cdylib: libmq_bridge_connect
-          ├─ mq-bridge plugin SDK (runtime, handles, panic boundary)
-          ├─ CanonicalMessage / disposition translation
-          └─ private batch C ABI, resolved at runtime
-              └─ Go c-shared sibling: libmq_bridge_connect_go
-                  ├─ Benthos StreamBuilder, one stream per endpoint
-                  ├─ batch parking with per-message dispositions
-                  └─ curated Redpanda component imports
-```
-
-Two artifacts ship together in one directory. The Rust plugin locates the Go
-sibling **relative to its own absolute path** ([`src/sibling.rs`](src/sibling.rs)),
-never via the working directory or the system library search path.
-`MQ_BRIDGE_CONNECT_GO_LIBRARY` overrides that with an absolute path, for tests.
-A crates.io build falls back to the copy its build script fetched
-([Install](#install)).
-
-The private Rust↔Go ABI ([`go-bridge/bridge.h`](go-bridge/bridge.h)) is versioned
-independently of mq-bridge's public plugin ABI: a `struct_size` plus
-major/minor pair, C scalar types only, explicit ownership, and one call per
-*batch* — never per message. A batch crosses as one length-prefixed blob
-([`src/wire.rs`](src/wire.rs), [`go-bridge/wire.go`](go-bridge/wire.go)): one
-allocation and one free per crossing, and no base64 of binary payloads.
-
-### Why a separate Go library
-
-Redpanda Connect is Go. Linking a Go `c-archive` into a `dlopen`ed Rust cdylib
-hits static-TLS problems ([golang/go#48596](https://github.com/golang/go/issues/48596)),
-and reimplementing mq-bridge's plugin vtable in Go would duplicate handle
-management, buffer pairing, status mapping and panic containment that the Rust
-SDK already provides. A `c-shared` sibling keeps mq-bridge's tested ABI on the
-Rust side and a small private ABI in between.
+`mq-bridge` loads a small Rust plugin (`libmq_bridge_connect`), which loads a Go
+`c-shared` sibling (`libmq_bridge_connect_go`) holding the Redpanda Connect
+components. The two must sit in the same directory. Batches, never single
+messages, cross a private C ABI between them. See
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the architecture, the build and
+the test suite.
 
 ## Install
 
@@ -199,87 +107,59 @@ from `target/<profile>/` next to the executable, together with
 The release archives are the same files for a manual install — see
 [packaging/INSTALL.md](packaging/INSTALL.md).
 
-The requirements below are for **building** it, not for using it.
+### Docker
 
-## Requirements
+The [`mq-bridge-app`](https://github.com/marcomq/mq-bridge/tree/main/apps/mq-bridge-app)
+image (`ghcr.io/marcomq/mq-bridge-app`) has no plugins built in, but it searches
+`/usr/local/lib/mq-bridge` for them, so installing the plugin is copying a
+Linux release archive there. The image is Debian 12 based, which the Linux
+archives (built against glibc 2.35) run on.
 
-| Tool | Version |
-| :--- | :--- |
-| Rust | 1.85+ |
-| Go | 1.26.6+ (cgo enabled — needs a working C toolchain) |
-| `mq-bridge` | `0.4.13` from crates.io (plugin ABI 1.1) |
-
-Pinned upstreams: Benthos `v4.78.0`, Redpanda Connect `v4.107.2`.
-
-Cross-compilation is **not** a supported build path: cgo is disabled by default
-for cross builds and needs a target C compiler and sysroot. Build on native
-runners per target.
-
-## Build and verify
+Download and unpack the archive for the image's architecture
+(`aarch64-unknown-linux-gnu` on arm64):
 
 ```sh
-sh scripts/phase0-smoke.sh      # Linux / macOS
+curl -fsSLO https://github.com/marcomq/mq-bridge-connect/releases/download/v0.1.0/mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+tar xzf mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu.tar.gz
 ```
 
-```powershell
-scripts\phase0-smoke.ps1        # Windows
+**Build a derived image** — the recommended way:
+
+```dockerfile
+FROM ghcr.io/marcomq/mq-bridge-app:latest
+COPY mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu/*.so /usr/local/lib/mq-bridge/
+COPY mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu/THIRD_PARTY_NOTICES \
+     mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu/LICENSE-* \
+     /usr/share/licenses/mq-bridge-connect/
 ```
 
-The script builds the Go `c-shared` library and the Rust cdylib into the same
-`target/<profile>/` directory, runs `cargo test`, then runs
-[`phase0_smoke`](src/bin/phase0_smoke.rs), which:
-
-1. opens the Go library, builds and closes an empty Benthos resource manager;
-2. asserts an ordinary Go panic is recovered at the export boundary and
-   surfaced as a status plus a diagnostic string, not a process abort;
-3. loads the Rust cdylib through `mq_bridge::plugin::load_endpoint_plugin` and
-   checks the advertised endpoint name and capabilities.
-
-The Go side has its own tests, which need the module cache environment the
-script sets up. Run them under the race detector — the sink parks source batches
-across goroutines, so that is the check that matters:
+`COPY` leaves the files owned by root, which is what plugin discovery requires:
+a library it finds on its own is loaded only if it and every directory above it
+belong to root or to the user running mq-bridge (`nonroot` here). A route can
+then name `connect` with no further setup:
 
 ```sh
-cd go-bridge && go test -race ./...
+docker build -t mq-bridge-app-connect .
+docker run --rm mq-bridge-app-connect copy 'connect+mqtt://broker:1883/orders' 'file:///app/orders.jsonl'
 ```
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs all of it on every
-push: `gofmt`, `go vet` and `go test -race`; `cargo fmt`, `cargo clippy -D
-warnings` and the smoke script on both Linux and macOS; and the conformance
-suite against beanstalkd, NATS JetStream and Redis.
-
-Each connector's test skips when its broker is absent, so you can run one
-without the others. NATS and Redis come from the host repository's compose
-files, which CI reuses rather than duplicating, so the broker versions stay in
-step with the ones mq-bridge itself tests against:
+**Or mount the directory** without building an image. A bind mount keeps the
+host's file owner, which discovery refuses, so name the plugin by path —
+a library loaded by path is not ownership-checked:
 
 ```sh
-docker run --rm -d -p 11300:11300 schickling/beanstalkd
-docker compose -f ../mq-bridge/tests/integration/docker-compose/nats.yml up -d --wait
-docker compose -f ../mq-bridge/tests/integration/docker-compose/redis.yml up -d --wait
-
-MQ_BRIDGE_CONNECT_BEANSTALKD=127.0.0.1:11300 \
-MQ_BRIDGE_CONNECT_NATS=127.0.0.1:4222 \
-MQ_BRIDGE_CONNECT_REDIS=127.0.0.1:6379 \
-    cargo test --test conformance -- --nocapture
+docker run --rm -v "$PWD/mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu:/plugins/connect:ro" \
+    ghcr.io/marcomq/mq-bridge-app:latest \
+    --plugin /plugins/connect/libmq_bridge_connect.so copy 'connect+mqtt://broker:1883/orders' 'file:///app/orders.jsonl'
 ```
 
-The JetStream test takes about 30s: an uncommitted batch only returns once
-`ack_wait` expires, and that is an input-only field the shared config cannot
-shorten.
+The Go sibling is found beside the plugin, so mount the whole directory, not
+the one file. Either way, keep `THIRD_PARTY_NOTICES` in the image or the mount:
+it is part of the distribution (see [packaging/INSTALL.md](packaging/INSTALL.md)).
+The first `connect` route loads a 218 MiB library, so give it a generous
+startup timeout (see [Known issues](#known-issues)).
 
-### Versioning
-
-`Cargo.toml` is the source of truth for the package version. Update every
-ecosystem manifest together before tagging a release:
-
-```console
-python3 scripts/set_version.py 0.1.1
-```
-
-`python3 scripts/set_version.py --check` verifies that the Cargo, npm and Python
-versions match. The [release workflow](.github/workflows/release.yml) runs that
-check and also requires the tag to match the version.
+Building the plugin yourself: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Examples
 
@@ -294,36 +174,17 @@ boundary.
 | [`route.rs`](examples/route.rs) | A full route — both config forms, both directions, middleware, a handler, clean shutdown. |
 | [`mqb-route.yaml`](examples/mqb-route.yaml) | The same route for the `mqb` CLI / server and the desktop UI, with no code at all. |
 | [`python_route.py`](examples/python_route.py) | The same route from Python, loading the plugin at runtime. |
-| [`throughput.rs`](examples/throughput.rs) | The benchmark harness behind the numbers above. |
+| [`throughput.rs`](examples/throughput.rs) | The benchmark harness behind [docs/PERFORMANCE.md](docs/PERFORMANCE.md). |
 
-The Rust examples run as ordinary binaries, so they do not sit next to the Go
-sibling the way the cdylib does. Point at it explicitly:
-
-```sh
-cargo build --lib
-(cd go-bridge && go build -buildmode=c-shared \
-    -o ../target/debug/libmq_bridge_connect_go.dylib .)   # .so on Linux
-
-MQ_BRIDGE_CONNECT_GO_LIBRARY=$PWD/target/debug/libmq_bridge_connect_go.dylib \
-    cargo run --example quickstart
-```
-
-`mqb` and Python load the plugin instead, which finds the Go sibling beside it:
+`mqb` and Python load the plugin, which finds the Go sibling beside it:
 
 ```sh
 MQB_PLUGIN_DIR=$PWD/target/debug mqb --config examples/mqb-route.yaml
 python examples/python_route.py
 ```
 
-The build uses the Go toolchain's own caches (`go env GOCACHE`, `GOMODCACHE`).
-They are shared with every other Go project and trimmed automatically; an
-earlier revision pointed them under `target/`, which gave each checkout a
-private ~26 GB copy that nothing ever reclaimed. `go clean -cache -modcache`
-frees them.
-
-[`scripts/benchmark.sh`](scripts/benchmark.sh) measures the boundary against an
-identical pipeline that never leaves Go — see
-[Throughput](#throughput-against-a-native-pipeline).
+The Rust examples need `MQ_BRIDGE_CONNECT_GO_LIBRARY` set; see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#running-the-examples).
 
 ## Configuring an endpoint
 
@@ -535,275 +396,52 @@ The middlewares are registered when the plugin loads, so a route that uses them
 without a `connect` endpoint needs a host that loads its plugins up front, as
 `mqb`'s `plugins:` list does.
 
+**Reach for them for what mq-bridge lacks, not for speed.** Crossing into Go
+and back costs about 0.9 µs per message, and the processor's own work comes on
+top: ~1.5 µs for `root = this`, ~2.6 µs for a `merge`
+([Performance](docs/PERFORMANCE.md#through-mqb)). Processing is CPU-bound, so it scales across route
+workers — 2.2× with `mqb`'s default of four — when the sink takes batches in any
+order; `file` keeps order, which holds the chain to one worker.
+
 ## Curated components
 
-Components are linked from an explicit allowlist,
-[`go-bridge/components.allow`](go-bridge/components.allow) — the 54
-`public/components` packages of Redpanda Connect that reach no file carrying a
-Redpanda Community License header and can be linked into a shared library, out
-of the 79 that exist. The allowlist is
-data: [`scripts/gen-components.py`](scripts/gen-components.py) turns it into
-`go-bridge/internal/components`, which both the bridge and the catalog tool
-import, so they cannot drift apart.
-
-Enumerating the registered components in the built library gives:
-
-| Registered | Count |
-| :--- | ---: |
-| Inputs | 51 |
-| Outputs | 63 |
-| Processors | 68 |
-
-Reproduce with `go run ./internal/catalogtool` from [`go-bridge/`](go-bridge/),
-which walks the Benthos global environment of the library as built.
-
-`tigerbeetle` is the 55th RCL-free package and is excluded on every platform:
-it ships prebuilt static archives, and neither can go into a `c-shared` object.
-The macOS one has members that are not 8-byte aligned, which only the deprecated
-`-ld_classic` accepts. The Linux one carries `R_X86_64_TPOFF32` initial-exec TLS
-relocations, which a shared object cannot hold — `ld` says "recompile with
-`-fPIC`", and since the archive is prebuilt, we cannot.
-
-The taint is transitive and cannot be guessed from a package name: `snowflake`,
-`kafka`, `aws` and `redpanda` are all excluded, while `gcp` is included because
-its RCL code is confined to a `gcp/enterprise` subpackage that
-`components/gcp` never imports. Two upstream files carry most of the blast
-radius — `internal/serviceaccount/oauth2.go` and `internal/license`.
-
-That the boundary holds is checked rather than asserted:
-[`scripts/check-rcl.py`](scripts/check-rcl.py) asks the Go toolchain for the
-package closure the compiler actually compiles, reads every file in it, and
-fails on an RCL header. It runs in CI, so an upstream release that taints a
-package we link is caught at the next push rather than after shipping. At
-connect v4.110.0 it reads 20,741 linked files and finds none; the same scan of
-the `all` bundle finds 193.
-
-The aggregate `public/components/all` is RCL-tainted, so the "everything" bundle
-is not usable under Apache-2.0 terms. `public/bundle/free` does not exist in the
-published module; it is generated at build time and cannot be imported.
-
-The allowlist links several hundred third-party Go modules, none carrying an RCL
-header. [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) has the exact counts, the
-per-license breakdown and the non-recursive verification command; it is
-generated from what the build actually links, so it is the only place those
-numbers are maintained. RCL-free is not the same as permissive: see
-[Third-party licenses](#third-party-licenses).
+Only the Redpanda Connect packages that reach no Redpanda Community License
+code are linked — 51 inputs, 63 outputs and 68 processors, from the allowlist in
+[`go-bridge/components.allow`](go-bridge/components.allow). The aggregate
+`public/components/all` bundle, and with it `kafka`, `aws`, `snowflake` and
+`redpanda`, is excluded. How the allowlist is built and checked, and the
+third-party licenses it brings in, are in [docs/LICENSING.md](docs/LICENSING.md).
 
 ## Performance
 
-Measured on macOS arm64, release build. First the fixed costs of the approach —
-load time and per-call overhead — then throughput against a native pipeline.
-
-| | |
-| :--- | ---: |
-| Rust cdylib | 1.7 MiB |
-| Go sibling library | 45.2 MiB |
-| Go runtime resident set | ~7 MiB |
-| First load (cold page cache) | ~1400 ms |
-| Load (warm page cache) | ~4.7 ms |
-| Rust→Go call, steady state | ~300 ns |
-| Rust→Go call, first on a new OS thread | ~5.5 µs (worst seen 30 µs) |
-| `ResourceBuilder` build + close | ~24 µs |
-
-Three things follow.
-
-> **These figures predate the full allowlist.** They were measured against the
-> earlier three-package build (1 input, 2 outputs). Only two have been re-measured
-> against the full allowlist: the Go sibling is **218 MiB** release (stripped, macOS arm64), and
-> peak RSS is **113 MiB** — though that reading comes from the smoke test, which
-> does eight load/unload cycles, so it is not a steady-state number. Load time
-> and call latency have not been re-measured.
-
-**Size dominates.** The Go sibling is ~150× the Rust plugin. It is nearly all
-Redpanda Connect and its transitive dependencies, and it grows with the
-allowlist, not with usage.
-
-**Cold start is disk-bound.** ~1.4 s on first load versus ~4.7 ms warm is the
-cost of faulting in a 45 MiB image. It is paid once per machine boot, but it is
-paid during `mq-bridge` startup.
-
-**Cross the boundary per batch, never per message.** ~300 ns steady-state is
-cheap against real network I/O but not against nothing. The sharper edge is the
-first call from an OS thread the Go runtime has not seen: 10–50× the steady
-cost. `mq-bridge`'s tokio worker pool is fixed, so that amortises — but code
-that calls into Go from `spawn_blocking` threads would pay it repeatedly. This
-is why the private ABI is defined per batch.
-
-### Throughput against a native pipeline
-
-[`scripts/benchmark.sh`](scripts/benchmark.sh) runs every pipeline twice: once
-entirely inside Go ([`nativebench`](go-bridge/internal/nativebench/main.go)), and
-once with mq-bridge owning an end
-([`examples/throughput.rs`](examples/throughput.rs)). Both link the same Benthos
-engine and the same component set, so what separates the two numbers is the
-boundary and nothing else. macOS arm64 on AC power, 200 000 messages of 256 B,
-batches of 500, `max_in_flight: 64`, connect v4.110.0; best of five, and the
-second column of costs is an independent repeat of the whole run:
-
-| scenario | native | bridged | cost | repeat |
-| :--- | ---: | ---: | ---: | ---: |
-| `generate` → mq-bridge | 1 976 285 msg/s | 1 826 117 msg/s | 1.08× | 1.07× |
-| `file` → mq-bridge | 238 851 msg/s | 199 004 msg/s | 1.20× | 1.19× |
-| mq-bridge → `drop` | 1 976 285 msg/s | 3 664 413 msg/s | 0.54× | 0.56× |
-| mq-bridge → `file` | 171 996 msg/s | 182 165 msg/s | 0.94× | 1.02× |
-
-Absolute numbers track the machine, so read the `cost` column, not the first
-two.
-
-**The plugin cannot be faster than Redpanda Connect.** It is Redpanda Connect,
-plus a boundary. The rows under 1.00× are not a win: their baseline fabricates
-every message with a Bloblang mapping, which the publisher is instead handed for
-free. What those rows show is that the publisher boundary disappears into the
-noise, not that anything got faster.
-
-**The `file` row is a tuning artefact, not a boundary cost.** `file` emits one
-message per batch, and `max_in_flight` counts batches, so 64 there means 64
-messages in flight rather than 32 000 — and every one of those round-trips
-through mq-bridge before the source may refill. Raising it to 512 turns that row
-into **0.95×** (252 727 bridged against 239 047 native) and leaves the others
-where they are. Any source that does not batch wants a far higher
-`max_in_flight` than one that does; the cost is memory, since a parked message
-is a resident message.
-
-Timings need a quiet machine, but allocation is deterministic and says the same
-thing. Per message, measured in Go alone with `go test -bench`
-([`stream_bench_test.go`](go-bridge/stream_bench_test.go)), without cgo or
-Rust: a native `drop` allocates 1 189 B, the bridged sink 1 528 B. The boundary
-is the 339 B difference, and it is one blob per batch and nothing per message —
-encoding a batch of 500 allocates once, whether or not the messages carry
-metadata. Three things had to go for that to hold:
-
-- Sizing the blob from a fixed 256 B cost 1 373 B per message, because `append`
-  reached 130 KB by doubling and copying eleven times. It is now sized from what
-  the last blob measured.
-- Rendering metadata through `fmt.Sprint` cost an allocation per message as soon
-  as a connector set a number — `file` sets a mod time, Kafka an offset and a
-  partition. The digits now go straight into the blob.
-- Decoding copied every payload out of the blob. Payloads are now slices of it
-  (`Bytes` is reference-counted), so a batch of 500 costs one allocation on the
-  Rust side instead of 501.
-
-**Two properties of the sink are load-bearing**, and both are worth knowing
-before changing it. It is a `service.BatchOutput` rather than a single-message
-`service.Output`, because Benthos breaks a batch bound for the latter into a
-separate blocked goroutine per message: that costs **5.2×** in scheduler
-contention alone, enough that a CPU profile is 60% `runtime.lock2` under
-`selectgo` with almost no work in it. Per-message nack granularity survives the
-change through `service.BatchError` — see [Semantics](#semantics). And
-[`collect`](go-bridge/stream.go) hands a partly filled batch over as soon as every
-in-flight slot is parked, instead of waiting out `batchLinger` for messages that
-cannot arrive until mq-bridge commits; that is worth **14×** to any source
-emitting one message per batch, `file` among them.
-`TestASourceOfSingleMessageBatchesDoesNotWaitOutTheLinger` holds the line.
-
-### Against mq-bridge's native endpoints
-
-[`scripts/equivalence.sh`](scripts/equivalence.sh) holds the `connect` endpoint
-to the endpoint mq-bridge ships for the same broker, through the `mqb` CLI. For
-NATS JetStream, RabbitMQ (AMQP 0.9) and Redis Streams it fills a fresh queue with
-one implementation and drains it with the other, in all four pairings:
-
-```sh
-sh scripts/equivalence.sh     # needs mqb 0.4.13+, jq, and mq-bridge's nats/amqp/redis compose brokers
-```
-
-**The results are the same.** Every pairing delivers exactly the messages sent,
-payloads and metadata alike, so either implementation can read what the other
-wrote. MQTT is left out: a topic keeps nothing for a subscriber that has not
-connected yet, so it cannot be filled first and drained afterwards.
-
-**Publishing performs on par with the native endpoints.** Draining through the
-plugin is slower. On NATS the gap is modest. On AMQP and Redis Streams it is
-large with the connectors' defaults, which fetch a handful of messages at a
-time: `amqp_0_9` defaults to `prefetch_count: 10` and `redis_streams` to
-`limit: 10`. Raising them closes most of the gap:
-
-```yaml
-config: { connector: amqp_0_9, prefetch_count: 1000, … }
-config: { connector: redis_streams, limit: 500, … }
-```
-
-`mqb` 0.4.13 leaves a headless run up after its `exit_on_empty` routes
-complete, so the script stops each route once it has finished, and the times
-include process start and connection.
+The plugin adds 3 MiB of Rust and a 218 MiB Go library, ~90 ms to a warm start
+and ~170 MiB of resident memory. Through `mqb`, a Redpanda sink takes 3.25M
+rows/s and a Redpanda source feeds 1.94M rows/s; a processor middleware costs
+~0.9 µs a message to cross plus the processor's own work. Numbers, methodology
+and the comparison against native pipelines and mq-bridge's own endpoints:
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Known issues
 
-### The Go runtime is loaded once and never unloaded
-
-Go does not support `dlclose` of a `c-shared` library. Dropping and reloading
-one aborts the process with `fatal error: morestack on g0` — measured at 27
-failures in 120 runs before this was fixed.
-
-[`GoLibrary`](src/go_library.rs) therefore wraps its handle in `ManuallyDrop`:
-the mapping stays resident for the life of the process, and dropping a
-`GoLibrary` releases only the Rust-side handle. `mq-bridge` already retains
-loaded plugins, so this matches host behaviour rather than fighting it. The
-smoke test asserts the contract — it loads eight handles, keeps them alive,
-re-probes them, drops them all at once, and reopens — and passes 150/150.
-
-The cost is honest: **memory is never reclaimed**, and a process that loads the
-plugin keeps the Go runtime until it exits.
-
-Related: [golang/go#65050](https://github.com/golang/go/issues/65050) reports
-corruption with multiple Go `c-shared` runtimes on macOS. Until that is
-understood, allow only **one** Go-runtime plugin per process.
-
-### Hosts must install signal handlers before loading the plugin
-
-The Go runtime installs no SIGINT/SIGTERM handler in `c-shared` mode, and
-Benthos only does so in its CLI, not in the `StreamBuilder` path used here. But
-Go requires every non-Go handler to set `SA_ONSTACK`, and it adds that flag only
-to handlers that already exist when the library loads. `tokio::signal`
-(`signal-hook-registry`) does not set it, so a handler registered *after* the
-plugin loads can run on a goroutine stack when the signal lands on a Go thread.
-Register signal handlers first — e.g. `tokio::signal::unix::signal(...)` for
-SIGINT and SIGTERM — then load the plugin. `mqb` does this before loading
-plugins.
-
-### Most connectors have never been run
-
-The data path is exercised by [`tests/data_path.rs`](tests/data_path.rs)
-(`socket_server` / `socket` over loopback TCP) and by the Go tests in
-[`go-bridge/stream_test.go`](go-bridge/stream_test.go), which drive
-acknowledgement through the same code the ABI calls. Against real brokers,
-only the connectors in the "What has been tested" table at the top have been
-run: six through the conformance suite in CI, the rest by hand. Nothing has been run against
-S3, Pulsar or the cloud and database connectors beyond SQLite and MongoDB, and
-connector-specific behaviour — authentication, partitioning, redelivery
-timing — is unverified outside those runs.
-
-`mq_bridge::plugin::conformance` is the acceptance gate, and it passes as
-[`tests/conformance.rs`](tests/conformance.rs), each connector held to the
-checks its transport supports. It runs in CI against broker containers; locally
-each test skips unless its broker's environment variable is set
-(`MQ_BRIDGE_CONNECT_BEANSTALKD`, `…_NATS`, `…_REDIS`, `…_AMQP`, `…_MQTT`).
-
-Deployment also requires **two files in the same directory**. The Rust plugin
-resolves its sibling from its own absolute path, so this is robust, but it does
-mean the artifact is not a single file.
-
-`THIRD_PARTY_NOTICES` travels with those two files. The libraries statically
-link third-party code whose licenses require their notices to accompany the
-binaries, so a deployment that copies only the two libraries is missing required
-notices. Release archives ship the notices and both license files alongside the
-libraries — keep the directory together, and if you repackage the libraries into
-an image, a formula or a package, install the notices there too. See
-[`packaging/INSTALL.md`](packaging/INSTALL.md).
-
-### The first route can outlast a 5 s startup timeout
-
-The Go library is ~218 MB and is loaded when the first `connect` endpoint is
-created, not when the host starts. A route started over the mq-bridge MCP server
-right after it starts can miss the default `startup_timeout_ms` of 5000; give the
-first one `startup_timeout_ms: 30000`. Later routes start quickly.
-
-### Crash isolation
-
-Every in-process option shares fate with the host. Deferred `recover` contains
-ordinary panics only; fatal Go runtime errors, native crashes and OOM remain
-process-fatal for `mq-bridge` itself. Only a subprocess deployment of Redpanda
-Connect gives real isolation.
+* **The Go runtime is loaded once and never unloaded.** Go does not support
+  `dlclose` of a `c-shared` library, so the mapping — and its memory — stays
+  resident until the process exits. Allow only **one** Go-runtime plugin per
+  process ([golang/go#65050](https://github.com/golang/go/issues/65050)).
+* **Hosts must install signal handlers before loading the plugin.** Go adds
+  `SA_ONSTACK` only to handlers that exist when the library loads, and
+  `tokio::signal` does not set it. Register SIGINT/SIGTERM handlers first; `mqb`
+  does.
+* **Most connectors have never been run** against a live broker through this
+  boundary — see [docs/TESTING.md](docs/TESTING.md).
+* **Two libraries plus `THIRD_PARTY_NOTICES`, in one directory.** The notices
+  are required by the licenses of statically linked code; keep them with the
+  libraries in any repackaging ([`packaging/INSTALL.md`](packaging/INSTALL.md)).
+* **The first route can outlast a 5 s startup timeout.** The Go library loads
+  when the first `connect` endpoint is created. Over the mq-bridge MCP server,
+  give the first route `startup_timeout_ms: 30000`.
+* **No crash isolation.** Deferred `recover` contains ordinary panics only;
+  fatal Go runtime errors, native crashes and OOM take the host down with them.
+  Only a subprocess deployment of Redpanda Connect gives real isolation.
 
 ## Semantics
 
@@ -863,52 +501,10 @@ third-party code keeps its own terms, so any binary distribution must still ship
 actually linked. Because Go build tags change the linked set, the audit unit is
 the built artifact, not `go.mod`.
 
-### Third-party licenses
-
-The distributed artifact is **not** purely MIT/Apache-2.0. Every linked Redpanda
-Connect component is Apache-2.0 — that is what the allowlist guarantees — but ten
-linked Go modules are weak copyleft. None is GPL, LGPL or AGPL, so nothing
-obliges you to open your own source, and nothing linked restricts how you may
-use the binaries. See `THIRD_PARTY_NOTICES` for the counts.
-
-Nine are MPL-2.0, which is file-level copyleft: distributing a binary that
-includes them requires making the source of *those files* available to
-recipients, under MPL-2.0, and saying where. They are linked unmodified at the
-pinned versions, and `THIRD_PARTY_NOTICES` names a version-exact Go module proxy
-URL for each, which is what discharges the obligation.
-
-| Module | Reached through |
-| :--- | :--- |
-| `hashicorp/golang-lru/v2` | `pure` → Benthos base |
-| `hashicorp/golang-lru/arc/v2` | `pure` → Benthos base |
-| `go-sql-driver/mysql` | `sql` |
-| `hashicorp/go-retryablehttp` | `sql` → `databricks-sql-go` |
-| `hashicorp/go-cleanhttp` | `sql` → `databricks-sql-go` |
-| `hashicorp/go-uuid` | `sql` → `trino-go-client` → `gokrb5` |
-| `certifi/gocertifi` | `spicedb` → `authzed/grpcutil` |
-| `r3labs/diff/v3` | `changelog` |
-| `cyphar/filepath-securejoin` | `git` → `go-git` |
-
-The tenth is `github.com/eclipse/paho.mqtt.golang`, behind the `mqtt` connector,
-offered under either EPL-2.0 or EDL-1.0. This distribution relies on the EDL-1.0
-arm, a BSD-3-Clause equivalent carrying no copyleft obligation.
-
-**The MPL-2.0 obligation cannot be trimmed away.** `golang-lru` arrives through
-`public/components/pure`, which Benthos requires as its base component set.
-Dropping `sql`, `mqtt`, `spicedb`, `changelog` and `git` would clear the other
-eight, at the cost of five connector families, and still leave it.
-
-The Rust side is entirely permissive: MIT/Apache-2.0 throughout, plus ISC,
-Unlicense OR MIT, and the ICU crates' Unicode-3.0 — attribution, not copyleft.
-
-The linked set differs per platform, so the notices are the union across every
-released platform and mark any module that is not linked on all of them.
-
-Counts and licenses come from `THIRD_PARTY_NOTICES`; the paths were traced with
-`go mod why -m <module>` from [`go-bridge/`](go-bridge/).
-[`scripts/gen-third-party-notices.py`](scripts/gen-third-party-notices.py) fails
-the build on an unrecognised license or on a bare EPL-2.0. MPL-2.0 passes
-deliberately, because the notice documents its obligation rather than hiding it.
+The distributed artifact is **not** purely MIT/Apache-2.0: ten linked Go
+modules are weak copyleft (nine MPL-2.0, one EPL-2.0/EDL-1.0 used under
+EDL-1.0), none GPL, LGPL or AGPL. See
+[docs/LICENSING.md](docs/LICENSING.md#third-party-licenses).
 
 ### Contribution
 

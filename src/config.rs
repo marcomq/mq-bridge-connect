@@ -349,16 +349,16 @@ fn place_uri_fields(
 ) -> Result<()> {
     // A URI with no authority still yields an address, `generate://`, and one
     // with no path may yield an empty topic. No component can use either.
-    let non_empty = |value: Value| {
-        let empty = value.as_str().is_some_and(|text| {
-            text.is_empty()
-                || text
-                    .split_once("://")
+    let non_empty = |value: Value| (value.as_str() != Some("")).then_some(value);
+    let address = component
+        .remove("address")
+        .and_then(non_empty)
+        .filter(|value| {
+            !value.as_str().is_some_and(|text| {
+                text.split_once("://")
                     .is_some_and(|(_, rest)| rest.is_empty())
+            })
         });
-        (!empty).then_some(value)
-    };
-    let address = component.remove("address").and_then(non_empty);
     let topic = component.remove("topic").and_then(non_empty);
     if address.is_none() && topic.is_none() {
         return Ok(());
@@ -709,6 +709,19 @@ mod tests {
         let read = component(Direction::Consumer, "connect+generate://?count=100");
         assert!(read["generate"].get("address").is_none(), "{read}");
         assert!(read["generate"].get("topic").is_none(), "{read}");
+    }
+
+    #[test]
+    fn a_topic_shaped_like_a_uri_is_still_a_topic() {
+        let config = json!({
+            "connector": "mqtt",
+            "address": "mqtt://localhost:1883",
+            "topic": "events://",
+        });
+        let document: Value =
+            serde_json::from_str(&stream_config(Direction::Consumer, &config).unwrap()).unwrap();
+
+        assert_eq!(document["input"]["mqtt"]["topics"], json!(["events://"]));
     }
 
     #[test]

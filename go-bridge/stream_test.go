@@ -244,19 +244,21 @@ func TestParseStreamConfigKeepsEachSection(t *testing.T) {
 
 // Form A arrives as JSON, and a URI's query values in it are always strings.
 func TestAStringGivenToABoolOrNumberFieldTakesTheFieldsType(t *testing.T) {
-	config, err := parseStreamConfig(kindConsumer, `{"input":{"redis_streams":{`+
-		`"url":"redis://localhost:6379","streams":["s"],`+
-		`"start_from_oldest":"true","limit":"25","body_key":"true"}}}`)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	for _, want := range []string{`"start_from_oldest": true`, `"limit": 25`, `"body_key": "true"`} {
-		if !strings.Contains(config.input, want) {
-			t.Errorf("input section lacks %q: %q", want, config.input)
+	for limit, decimal := range map[string]string{"025": "25", "09": "9"} {
+		config, err := parseStreamConfig(kindConsumer, `{"input":{"redis_streams":{`+
+			`"url":"redis://localhost:6379","streams":["s"],`+
+			`"start_from_oldest":"true","limit":"`+limit+`","body_key":"true"}}}`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-	}
-	if err := service.NewStreamBuilder().AddInputYAML(config.input); err != nil {
-		t.Errorf("Benthos rejected the coerced section: %v", err)
+		for _, want := range []string{`"start_from_oldest": true`, `"limit": ` + decimal + `,`, `"body_key": "true"`} {
+			if !strings.Contains(config.input, want) {
+				t.Errorf("input section lacks %q: %q", want, config.input)
+			}
+		}
+		if err := service.NewStreamBuilder().AddInputYAML(config.input); err != nil {
+			t.Errorf("Benthos rejected the coerced section: %v", err)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
@@ -24,6 +25,9 @@ type processorChain struct {
 	resources *service.Resources
 	release   func(context.Context) error
 	labels    []string
+	// Set once a batch comes out structured: the chain reads JSON, so later
+	// batches are parsed up front (see structured.go).
+	structured atomic.Bool
 }
 
 // What the Rust side sends: the steps in order, plus the resources they refer
@@ -115,6 +119,10 @@ func (c *processorChain) apply(blob []byte) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	var parsed []parsedPayload
+	if c.structured.Load() {
+		parsed = preparse(batch)
+	}
 	ctx := context.Background()
 	for step, label := range c.labels {
 		var stepErr error
@@ -160,11 +168,22 @@ func (c *processorChain) apply(blob []byte) ([]byte, []byte, error) {
 		count++
 	}
 	buffer := appendU32(make([]byte, 0, len(blob)), count)
-	for _, message := range batch {
+	for index, message := range batch {
 		if message == nil {
 			continue
 		}
-		if buffer, err = appendMessage(buffer, message); err != nil {
+		if parsed == nil && message.HasStructured() {
+			c.structured.Store(true)
+		}
+		var original parsedPayload
+		if parsed != nil {
+			original = parsed[index]
+		}
+		payload, err := processedPayload(message, original)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read message payload: %w", err)
+		}
+		if buffer, err = appendMessagePayload(buffer, message, payload); err != nil {
 			return nil, nil, err
 		}
 	}

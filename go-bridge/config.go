@@ -215,10 +215,11 @@ func retag(value *yaml.Node, fieldType string) {
 		}
 		value.Value, value.Tag = strconv.FormatBool(parsed), "!!bool"
 	case "int":
-		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
 			return
 		}
-		value.Value, value.Tag = text, "!!int"
+		value.Value, value.Tag = strconv.FormatInt(parsed, 10), "!!int"
 	case "float":
 		if _, err := strconv.ParseFloat(text, 64); err != nil {
 			return
