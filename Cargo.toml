@@ -6,7 +6,7 @@ rust-version = "1.85"
 description = "Unofficial Redpanda Connect compatibility plugin for mq-bridge"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/marcomq/mq-bridge-connect"
-exclude = [".github/", "node/", "python/", "packaging/"]
+exclude = [".github/", "node/", "python/", "packaging/", "artifacts/"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]
