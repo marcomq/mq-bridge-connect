@@ -478,6 +478,63 @@ against that schema before the endpoint is opened. It is off by default, and the
 checks that matter here — the two forms excluding each other, stray keys beside
 `yaml` — are made by the plugin itself either way.
 
+## Processors as middlewares
+
+Processors also run as mq-bridge middlewares, on any endpoint — a native
+`kafka` input as much as a `connect` one. Each processor below is its own
+middleware, `connect_<processor>`, configured exactly as the processor is:
+
+```yaml
+input:
+  kafka: { url: localhost:9092, topic: orders }
+  middlewares:
+    - connect_mapping: 'root = this.merge({"received_at": now()})'
+    - connect_dedupe:
+        key: '${! meta("kafka_key") }'
+        cache: { redis: { url: redis://localhost:6379 } }
+```
+
+| Middleware | What it is for |
+| :--- | :--- |
+| `connect_mapping`, `connect_mutation`, `connect_bloblang` | Bloblang rewrites; `deleted()` drops a message |
+| `connect_jq`, `connect_jmespath`, `connect_grok`, `connect_parse_log` | Reshaping and parsing |
+| `connect_json_schema` | Validation |
+| `connect_avro`, `connect_msgpack`, `connect_schema_registry_decode`, `connect_schema_registry_encode` | Encoding |
+| `connect_http`, `connect_branch`, `connect_cached`, `connect_javascript` | Enrichment and lookups |
+| `connect_dedupe` | Deduplication against a cache, which may be shared (Redis, Memcached) across instances |
+| `connect_log` | Logging each message |
+
+`connect_dedupe` and `connect_cached` take their `cache` inline, as a cache
+component, or as the label of a cache resource. In a URI (`mqb`) the middleware
+is written `|connect-<processor>?field=value`; a Bloblang processor takes its
+mapping as a parameter named after itself, `|connect-mapping?mapping=...`.
+
+Every middleware is one call into Go per batch. To run several processors in
+one call, and to share resources between them, use the `connect` middleware:
+
+```yaml
+middlewares:
+  - connect:
+      processors:
+        - schema_registry_decode: { url: http://localhost:8081 }
+        - mapping: 'root = this.payload'
+        - dedupe: { cache: seen, key: '${! json("id") }' }
+      cache_resources:
+        - { label: seen, memory: { default_ttl: 5m } }
+```
+
+It accepts any processor, not only the ones listed, as long as the processor
+keeps, rewrites or drops each message. One that splits a message
+(`unarchive`, `split`) or merges several (`archive`, `group_by`) fails the
+batch and belongs in a connect endpoint's `pipeline`. A message a processor
+marks as failed fails its batch as retryable, so mq-bridge's `retry` and `dlq`
+decide what happens next. Metadata the processors change is carried back; the
+message ID is kept.
+
+The middlewares are registered when the plugin loads, so a route that uses them
+without a `connect` endpoint needs a host that loads its plugins up front, as
+`mqb`'s `plugins:` list does.
+
 ## Curated components
 
 Components are linked from an explicit allowlist,
@@ -779,7 +836,8 @@ Connect gives real isolation.
   mq-bridge's secret extractor, and form B makes inline secrets tempting. Use
   environment or file references.
 
-Bloblang and processors **are** supported, through form B's `pipeline`. Explicit
+Bloblang and processors **are** supported, through form B's `pipeline` and as
+[middlewares](#processors-as-middlewares). Explicit
 non-goals: buffers, the HTTP management API, per-connector DLLs, and any claim of
 exactly-once or zero-copy behaviour.
 

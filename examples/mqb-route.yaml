@@ -28,6 +28,10 @@ routes:
           count: 10
           interval: ""
           mapping: "root.id = counter()"
+      # A Redpanda processor as an mq-bridge middleware; it works on any
+      # endpoint, not only a `connect` one.
+      middlewares:
+        - connect_mapping: 'root = this.merge({"seen_at": now()})'
 
     # Form B: a Redpanda Connect document without the `input` section, which
     # mq-bridge owns. Use it for processors and stream-level fields.

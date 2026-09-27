@@ -36,6 +36,16 @@ type StreamNextBatchFn =
 type StreamCommitFn = unsafe extern "C" fn(u64, u64, *const u8, usize, *mut OwnedBytes) -> i32;
 type StreamPublishFn = unsafe extern "C" fn(u64, *const u8, usize, *mut OwnedBytes) -> i32;
 type StreamCloseFn = unsafe extern "C" fn(u64, u32, *mut OwnedBytes) -> i32;
+type ProcessorOpenFn = unsafe extern "C" fn(*const u8, usize, *mut u64, *mut OwnedBytes) -> i32;
+type ProcessorApplyFn = unsafe extern "C" fn(
+    u64,
+    *const u8,
+    usize,
+    *mut OwnedBytes,
+    *mut OwnedBytes,
+    *mut OwnedBytes,
+) -> i32;
+type ProcessorCloseFn = unsafe extern "C" fn(u64, u32, *mut OwnedBytes) -> i32;
 
 #[repr(C)]
 struct ApiV1 {
@@ -49,6 +59,9 @@ struct ApiV1 {
     stream_commit: Option<StreamCommitFn>,
     stream_publish: Option<StreamPublishFn>,
     stream_close: Option<StreamCloseFn>,
+    processor_open: Option<ProcessorOpenFn>,
+    processor_apply: Option<ProcessorApplyFn>,
+    processor_close: Option<ProcessorCloseFn>,
 }
 
 /// A loaded Go runtime and its versioned private ABI table.
@@ -116,6 +129,9 @@ impl GoLibrary {
             || value.stream_commit.is_none()
             || value.stream_publish.is_none()
             || value.stream_close.is_none()
+            || value.processor_open.is_none()
+            || value.processor_apply.is_none()
+            || value.processor_close.is_none()
         {
             bail!("private ABI table contains a null required function");
         }
@@ -264,6 +280,61 @@ impl GoLibrary {
             self.api().stream_close.expect("validated stream_close")(handle, timeout_ms, &mut error)
         };
         self.result("stream_close", status, error)
+    }
+
+    /// Builds a chain of Redpanda processors from a `processors` document.
+    pub fn processor_open(&self, config: &str) -> Result<u64, GoError> {
+        let mut handle = 0u64;
+        let mut error = OwnedBytes::default();
+        let status = unsafe {
+            self.api().processor_open.expect("validated processor_open")(
+                config.as_ptr(),
+                config.len(),
+                &mut handle,
+                &mut error,
+            )
+        };
+        self.result("processor_open", status, error)
+            .map(|()| handle)
+    }
+
+    /// Runs a batch through the chain. Returns one keep flag per input message
+    /// and the kept messages, encoded in order.
+    pub fn processor_apply(
+        &self,
+        handle: u64,
+        batch: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), GoError> {
+        let mut kept = OwnedBytes::default();
+        let mut processed = OwnedBytes::default();
+        let mut error = OwnedBytes::default();
+        let status = unsafe {
+            self.api()
+                .processor_apply
+                .expect("validated processor_apply")(
+                handle,
+                batch.as_ptr(),
+                batch.len(),
+                &mut kept,
+                &mut processed,
+                &mut error,
+            )
+        };
+        let kept = self.take(kept);
+        let processed = self.take(processed);
+        self.result("processor_apply", status, error)
+            .map(|()| (kept, processed))
+    }
+
+    /// Releases the chain and the resources it built.
+    pub fn processor_close(&self, handle: u64, timeout_ms: u32) -> Result<(), GoError> {
+        let mut error = OwnedBytes::default();
+        let status = unsafe {
+            self.api()
+                .processor_close
+                .expect("validated processor_close")(handle, timeout_ms, &mut error)
+        };
+        self.result("processor_close", status, error)
     }
 
     fn result(

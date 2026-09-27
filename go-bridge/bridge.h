@@ -36,6 +36,14 @@ typedef int32_t (*mqbrp_stream_publish_fn)(uint64_t handle, uint8_t *batch, size
                                            mqbrp_owned_bytes *error_out);
 typedef int32_t (*mqbrp_stream_close_fn)(uint64_t handle, uint32_t timeout_ms,
                                          mqbrp_owned_bytes *error_out);
+typedef int32_t (*mqbrp_processor_open_fn)(uint8_t *config, size_t config_len,
+                                           uint64_t *handle_out, mqbrp_owned_bytes *error_out);
+typedef int32_t (*mqbrp_processor_apply_fn)(uint64_t handle, uint8_t *batch, size_t batch_len,
+                                            mqbrp_owned_bytes *kept_out,
+                                            mqbrp_owned_bytes *batch_out,
+                                            mqbrp_owned_bytes *error_out);
+typedef int32_t (*mqbrp_processor_close_fn)(uint64_t handle, uint32_t timeout_ms,
+                                            mqbrp_owned_bytes *error_out);
 
 typedef struct mqbrp_api_v1 {
     size_t struct_size;
@@ -48,6 +56,9 @@ typedef struct mqbrp_api_v1 {
     mqbrp_stream_commit_fn stream_commit;
     mqbrp_stream_publish_fn stream_publish;
     mqbrp_stream_close_fn stream_close;
+    mqbrp_processor_open_fn processor_open;
+    mqbrp_processor_apply_fn processor_apply;
+    mqbrp_processor_close_fn processor_close;
 } mqbrp_api_v1;
 
 const mqbrp_api_v1 *mqbrp_get_api_v1(void);
@@ -63,5 +74,12 @@ int32_t mqbrp_go_stream_commit(uint64_t handle, uint64_t batch_id, uint8_t *disp
 int32_t mqbrp_go_stream_publish(uint64_t handle, uint8_t *batch, size_t batch_len,
                                 mqbrp_owned_bytes *error_out);
 int32_t mqbrp_go_stream_close(uint64_t handle, uint32_t timeout_ms, mqbrp_owned_bytes *error_out);
+int32_t mqbrp_go_processor_open(uint8_t *config, size_t config_len, uint64_t *handle_out,
+                                mqbrp_owned_bytes *error_out);
+int32_t mqbrp_go_processor_apply(uint64_t handle, uint8_t *batch, size_t batch_len,
+                                 mqbrp_owned_bytes *kept_out, mqbrp_owned_bytes *batch_out,
+                                 mqbrp_owned_bytes *error_out);
+int32_t mqbrp_go_processor_close(uint64_t handle, uint32_t timeout_ms,
+                                 mqbrp_owned_bytes *error_out);
 
 #endif

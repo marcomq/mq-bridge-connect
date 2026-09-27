@@ -4,16 +4,21 @@
 //! `connect` input is a Benthos stream whose output is mq-bridge, and a
 //! `connect` output is one whose input is mq-bridge. See [`config`] for the two
 //! configuration forms.
+//!
+//! The processors that keep or drop a message are also exported as
+//! middlewares; see [`middleware`].
 
 mod config;
 mod consumer;
 mod go_library;
+#[cfg(feature = "plugin")]
+pub mod middleware;
 mod publisher;
 mod sibling;
 mod stream;
 mod wire;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use go_library::{GoError, GoLibrary, ProbeError, StreamKind};
 
@@ -31,12 +36,20 @@ pub struct ConnectFactory {
 
 impl Default for ConnectFactory {
     fn default() -> Self {
-        Self {
-            go: load_go_library()
-                .map(Arc::new)
-                .map_err(|error| format!("{error:#}")),
-        }
+        Self { go: go_library() }
     }
+}
+
+/// One Go runtime per process, shared by the endpoint and every middleware: Go
+/// cannot be unloaded, so a second load would gain nothing.
+fn go_library() -> Result<Arc<GoLibrary>, String> {
+    static GO: OnceLock<Result<Arc<GoLibrary>, String>> = OnceLock::new();
+    GO.get_or_init(|| {
+        load_go_library()
+            .map(Arc::new)
+            .map_err(|error| format!("{error:#}"))
+    })
+    .clone()
 }
 
 fn load_go_library() -> anyhow::Result<GoLibrary> {
@@ -97,8 +110,52 @@ fn route_context(route_name: &str, direction: &str, error: anyhow::Error) -> any
     ))
 }
 
+/// Exports the `connect` endpoint and middleware, plus one `connect_<processor>`
+/// middleware per listed processor.
 #[cfg(feature = "plugin")]
-mq_bridge::export_endpoint_plugin! {
-    name: "connect",
-    factory: ConnectFactory,
+macro_rules! export_connect_plugins {
+    ($($marker:ident => $processor:literal),* $(,)?) => {
+        $(
+            #[doc = concat!("The `", $processor, "` processor, as the `connect_", $processor,
+                            "` middleware.")]
+            #[derive(Debug, Default)]
+            pub struct $marker;
+
+            impl middleware::Processor for $marker {
+                const NAME: &'static str = $processor;
+            }
+        )*
+
+        mq_bridge::export_endpoint_plugins! {
+            { name: "connect", factory: ConnectFactory, middleware: middleware::ChainMiddleware },
+            $({
+                name: concat!("connect_", $processor),
+                factory: mq_bridge::plugin::sdk::NoEndpoint,
+                middleware: middleware::ProcessorMiddleware<$marker>,
+                capabilities: mq_bridge::plugin::sdk::CAPABILITIES_MIDDLEWARE_ONLY,
+            }),*
+        }
+    };
+}
+
+#[cfg(feature = "plugin")]
+export_connect_plugins! {
+    Mapping => "mapping",
+    Mutation => "mutation",
+    Bloblang => "bloblang",
+    Jq => "jq",
+    Jmespath => "jmespath",
+    Grok => "grok",
+    JsonSchema => "json_schema",
+    ParseLog => "parse_log",
+    Avro => "avro",
+    Msgpack => "msgpack",
+    SchemaRegistryDecode => "schema_registry_decode",
+    SchemaRegistryEncode => "schema_registry_encode",
+    Javascript => "javascript",
+    Http => "http",
+    Branch => "branch",
+    Cached => "cached",
+    Dedupe => "dedupe",
+    Log => "log",
 }
