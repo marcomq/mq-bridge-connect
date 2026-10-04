@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The host the endpoint round trips run under; its two checksums are in the
+  # `Install mqb` step.
+  MQB_VERSION: 0.4.18
 
 jobs:
   go:
@@ -92,6 +95,29 @@ jobs:
       - name: Build, test and smoke
         working-directory: mq-bridge-connect
         run: sh scripts/phase0-smoke.sh
+
+      # The released host, not one built here: this is the pairing a user runs,
+      # and it costs a download instead of a second compile.
+      - name: Install mqb
+        env:
+          MQB_ASSET: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
+          MQB_SHA256: ${{ matrix.os == 'macos-latest' && '25b2b869c6295193e663c20f96e051e675f1e48606f4a8444989c121ef663431' || 'edba97cd7a4fa99b7c35950f508b8dbf87a58903945689eedea783631f42366b' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/mqb"
+          curl -fsSL -o "$RUNNER_TEMP/mqb.tar.gz" \
+            "https://github.com/marcomq/mq-bridge/releases/download/v$MQB_VERSION/mq-bridge-cli-$MQB_ASSET.tar.gz"
+          echo "$MQB_SHA256  $RUNNER_TEMP/mqb.tar.gz" | shasum -a 256 -c -
+          tar xzf "$RUNNER_TEMP/mqb.tar.gz" -C "$RUNNER_TEMP/mqb"
+          dirname "$(find "$RUNNER_TEMP/mqb" -name mqb -type f | head -n 1)" >> "$GITHUB_PATH"
+      # Round trips through the library the previous step built, one connector
+      # per case, each broker a throwaway container. The macOS runner has no
+      # Docker, so only Linux is strict: there a broker that fails to start
+      # fails the job instead of skipping its cases.
+      - name: Endpoint round trips
+        working-directory: mq-bridge-connect
+        run: |
+          python3 tests/endpoints/run.py ${{ matrix.os == 'ubuntu-latest' && '--strict' || '' }} \
+            --plugin "$PWD/target/debug/libmq_bridge_connect.${{ matrix.os == 'macos-latest' && 'dylib' || 'so' }}"
 
   conformance:
     name: Conformance (beanstalkd, NATS, Redis, RabbitMQ, MQTT)

@@ -23,11 +23,11 @@ its job. Redpanda supplies only the I/O components.
 >
 > Messages cross the boundary in both directions, payloads and metadata survive
 > both ways, and an mq-bridge nack rejects the one source message it belongs to.
-> Six connectors run against live brokers in CI and about a dozen more have been
-> round-tripped by hand — 27 of the 114 endpoint components in all. The one you
-> are about to use may well be among the other 87: run the conformance suite
-> against it before you rely on it. See [docs/TESTING.md](docs/TESTING.md) for
-> exactly what has been tested and how.
+> 81 of the 114 endpoint components are round-tripped on every push, 52 of them
+> against a live broker, and six connectors are also held to the conformance
+> suite's redelivery checks. The one you are about to use may well be among the
+> other 33: [add a case for it](#test-coverage) before you rely on it. See
+> [docs/TESTING.md](docs/TESTING.md) for exactly what has been tested and how.
 
 ## When this is worth it
 
@@ -402,6 +402,95 @@ top: ~1.5 µs for `root = this`, ~2.6 µs for a `merge`
 ([Performance](docs/PERFORMANCE.md#through-mqb)). Processing is CPU-bound, so it scales across route
 workers — 2.2× with `mqb`'s default of four — when the sink takes batches in any
 order; `file` keeps order, which holds the chain to one worker.
+
+## Test coverage
+
+Two suites run in CI. The **round trips**
+([`tests/endpoints/`](tests/endpoints/)) publish through a component's output
+and read back through its input, using the `mqb` CLI and the templates of
+Redpanda Connect's own integration tests. The **conformance suite**
+([`tests/conformance.rs`](tests/conformance.rs)) is mq-bridge's acceptance
+gate, which also checks that a rejected or abandoned message comes back.
+
+| Component | Round trip | Conformance | Against |
+| :--- | :---: | :---: | :--- |
+| `amqp_0_9` | ✓ with metadata | ✓ | RabbitMQ 4.1 |
+| `amqp_1` | ✓ | – | RabbitMQ 4.1 |
+| `beanstalkd` | ✓ | ✓ | beanstalkd |
+| `mongodb` | ✓ | – | MongoDB 7 |
+| `mqtt` | ✓ | ✓ | Mosquitto 2.0 |
+| `nats` | ✓ | – | NATS 2.10 |
+| `nats_jetstream` | ✓ | ✓ | NATS 2.10 |
+| `nats_kv` | ✓ | – | NATS 2.10 |
+| `nats_stream` | ✓ | – | NATS Streaming 0.25 |
+| `nsq` | ✓ | – | nsqd 1.2 |
+| `pulsar` | ✓ | – | Pulsar 3.3 |
+| `redis_list` | ✓ | ✓ | Redis 7 |
+| `redis_pubsub` | ✓ | – | Redis 7 |
+| `redis_streams` | ✓ with metadata | ✓ | Redis 7 |
+| `cache` (output) → `redis_scan` | ✓ | – | Redis 7 |
+| `redis_hash` (output) | ✓ read back with the `redis` processor | – | Redis 7 |
+| `azure_blob_storage` | ✓ | – | Azurite 3.34 |
+| `azure_queue_storage` | ✓ | – | Azurite 3.34 |
+| `azure_table_storage` | ✓ | – | Azurite 3.34 |
+| `cassandra` | ✓ | – | Cassandra 5.0 |
+| `gcp_cloud_storage` | ✓ | – | fake-gcs-server 1.52 |
+| `gcp_pubsub` | ✓ | – | Pub/Sub emulator |
+| `qdrant` (output) | ✓ read back over REST | – | Qdrant 1.17 |
+| `questdb` (output) | ✓ read back over HTTP | – | QuestDB 8.0 |
+| `sql_raw` → `cockroachdb_changefeed` (input) | ✓ | – | CockroachDB 24.3 |
+| `sftp` | ✓ | – | OpenSSH (atmoz/sftp) |
+| `sql_insert` → `sql_select` | ✓ | – | PostgreSQL 16, SQLite |
+| `sql_raw` | ✓ | – | PostgreSQL 16, SQLite |
+| `file` | ✓ | – | no broker |
+| `file` → `csv` | ✓ | – | no broker |
+| `http_client` → `http_server` | ✓ | – | no broker |
+| `http_server` (output) → `http_client` (input) | ✓ | – | no broker |
+| `http_server` (output) → `websocket` (input) | ✓ | – | no broker |
+| `websocket` (output) → `http_server` | ✓ | – | no broker |
+| `nanomsg` | ✓ | – | no broker |
+| `socket` → `socket_server` | ✓ | – | no broker |
+| `subprocess` | ✓ | – | no broker |
+| `stdout` → `stdin` | ✓ | – | no broker |
+| `broker` | ✓ | – | no broker, wrapping `file` |
+| `fallback` → `sequence` | ✓ | – | no broker, wrapping `file` |
+| `retry` → `batched` | ✓ | – | no broker, wrapping `file` |
+| `drop_on` → `read_until` | ✓ | – | no broker, wrapping `file` |
+| `dynamic` | ✓ | – | no broker, wrapping `file` |
+| `reject_errored` (output) | ✓ | – | no broker, wrapping `file` |
+| `generate` (input) | feeds every round trip | – | no broker |
+
+That is 81 of the 114 inputs and outputs. Everything else — S3 and the other
+cloud connectors, Elasticsearch, OpenSearch and the rest — has not
+been run through this boundary.
+
+All 18 [processor middlewares](#processors-as-middlewares) and the `connect`
+chain are run end to end, and through the chain 23 more processors, 41 of the
+68 linked:
+
+| Processors | Run as | What is checked |
+| :--- | :--- | :--- |
+| `mapping`, `mutation`, `bloblang`, `jq`, `jmespath`, `grok`, `parse_log` | `connect_<processor>` | the rewritten payload; `deleted()` drops the message, `throw()` rejects the batch |
+| `json_schema` | `connect_json_schema` | a valid message passes, an invalid one rejects the batch |
+| `avro`, `msgpack` | `connect_<processor>` | encode, then decode back |
+| `schema_registry_encode`, `schema_registry_decode` | `connect_<processor>` | encode, then decode back, against a stub registry serving one Avro schema |
+| `http`, `branch`, `cached`, `javascript` | `connect_<processor>` | the enriched payload; `cached` answers a repeated key from its cache |
+| `dedupe`, `log` | `connect_<processor>` | a repeated key is dropped; a logged message passes unchanged |
+| `compress`, `decompress`, `bounds_check`, `select_parts`, `noop`, `sleep`, `metric` | `connect` chain | the payload after the chain; `bounds_check` drops a short message |
+| `try`, `catch`, `switch`, `for_each`, `while`, `retry`, `parallel`, `processors`, `workflow` | `connect` chain | the payload their child processors produce |
+| `cache`, `rate_limit` | `connect` chain | with a `cache_resources` / `rate_limit_resources` entry |
+| `command`, `subprocess` | `connect` chain | the payload piped through `tr` and `cat` |
+| `sql_raw`, `sql_insert`, `sql_select` | `connect` chain | rows written to and read from SQLite |
+
+`unarchive` is run only to show that a processor splitting a message rejects
+the batch. The other 27, among them `redis`, `mongodb`, `nats_kv`,
+`nats_request_reply`, `wasm` and the `archive` / `split` / `group_by` family
+that cannot be a middleware, are not run.
+
+To cover another component, paste its `output:` / `input:` template from
+upstream into [`tests/endpoints/cases.toml`](tests/endpoints/cases.toml), name
+an image, and run `python3 tests/endpoints/run.py <name>`. It needs `mqb` and
+Docker, and compiles nothing ([docs/TESTING.md](docs/TESTING.md#endpoint-round-trips)).
 
 ## Curated components
 

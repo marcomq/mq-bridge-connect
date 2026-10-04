@@ -1,0 +1,1379 @@
+# Connector round trips for tests/endpoints/run.py.
+#
+# A case is a Redpanda Connect stream template: the runner publishes through
+# its `output:` block and reads back through its `input:` block. Templates
+# marked `upstream` are copied from the integration test of that name under
+# github.com/redpanda-data/connect/v4/internal/impl/, and take the same
+# placeholders: $PORT, $ID, $MAX_IN_FLIGHT, $OUTPUT_BATCH_COUNT,
+# $OUTPUT_META_EXCLUDE_PREFIX and $VARn (set with `vars`). $DIR is a scratch
+# directory of the case.
+#
+# Case keys: broker, template, setup (a template run to completion first, for
+# what the connectors do not create), vars, env, count (10), timeout (30),
+# settle (1.5, seconds between starting the input and publishing),
+# order = "output_first", metadata = true, xfail = "why", stdio = true (the
+# publishing process's stdout becomes the reading one's stdin).
+# Broker keys: image, port, args, env, ready_log, ready_timeout (60),
+# exec (a local binary used instead of the image when it is on PATH),
+# capture ({ NAME = command } run in the container; its output becomes $NAME).
+# ports ({ NAME = port }, further container ports; the mapped one becomes $NAME).
+#
+# A [middlewares.*] case needs no broker: `input` lines go through a native
+# file-to-file route carrying `middlewares`, and what arrives is compared with
+# `expect` (unordered; JSON compared by value). `error` instead expects the
+# batch to be rejected with a message containing it. $HTTP is the port of a
+# server that answers a POST with its body uppercased; $DIR is a scratch
+# directory.
+
+# ---------------------------------------------------------------- brokers
+
+[brokers.beanstalkd]
+# The image publishes only `latest`, so it is pinned by digest.
+image = "schickling/beanstalkd@sha256:19a928e3563973219e44f6c29df2a71103c7db894692ae94b7d0760837877e73"
+port = 11300
+exec = ["beanstalkd", "-l", "127.0.0.1", "-p", "$PORT"]
+
+[brokers.redis]
+image = "redis:7-alpine"
+port = 6379
+exec = ["redis-server", "--port", "$PORT", "--save", ""]
+
+[brokers.nats]
+image = "nats:2.10-alpine"
+port = 4222
+args = ["--js"]
+exec = ["nats-server", "--js", "-a", "127.0.0.1", "-p", "$PORT"]
+
+[brokers.rabbitmq]
+image = "rabbitmq:4.1-alpine"
+port = 5672
+ready_log = "Server startup complete"
+ready_timeout = 120
+
+[brokers.mosquitto]
+image = "eclipse-mosquitto:2.0"
+port = 1883
+args = ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+
+[brokers.nsq]
+image = "nsqio/nsq:v1.2.1"
+port = 4150
+args = ["/nsqd"]
+
+[brokers.pulsar]
+image = "apachepulsar/pulsar:3.3.4"
+port = 6650
+args = ["bin/pulsar", "standalone"]
+# The default 2 GiB heap does not fit a small Docker VM.
+env = { PULSAR_MEM = "-Xms256m -Xmx512m -XX:MaxDirectMemorySize=256m" }
+ready_log = "messaging service is ready"
+ready_timeout = 180
+
+[brokers.mongodb]
+image = "mongo:7"
+port = 27017
+
+[brokers.postgres]
+image = "postgres:16-alpine"
+port = 5432
+env = { POSTGRES_USER = "testuser", POSTGRES_PASSWORD = "testpass", POSTGRES_DB = "testdb" }
+ready_log = "ready to accept connections(.|\\n)*ready to accept connections"
+
+[brokers.sftp]
+image = "atmoz/sftp:alpine"
+port = 22
+args = ["foo:pass:1001:100:upload"]
+ready_log = "Server listening on"
+capture = { HOST_KEY = ["cat", "/etc/ssh/ssh_host_ed25519_key.pub"] }
+
+# Azurite, one service per container: a broker has one port.
+[brokers.azurite_blob]
+image = "mcr.microsoft.com/azure-storage/azurite:3.34.0"
+port = 10000
+args = ["azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck"]
+
+[brokers.azurite_queue]
+image = "mcr.microsoft.com/azure-storage/azurite:3.34.0"
+port = 10001
+args = ["azurite-queue", "--queueHost", "0.0.0.0", "--skipApiVersionCheck"]
+
+[brokers.azurite_table]
+image = "mcr.microsoft.com/azure-storage/azurite:3.34.0"
+port = 10002
+args = ["azurite-table", "--tableHost", "0.0.0.0", "--skipApiVersionCheck"]
+
+[brokers.nats_streaming]
+image = "nats-streaming:0.25.6"
+port = 4222
+
+[brokers.fake_gcs]
+image = "fsouza/fake-gcs-server:1.52.2"
+port = 4443
+args = ["-scheme", "http", "-public-host", "localhost"]
+
+# Creates the topic `blobfish` in project `benthos` on start.
+[brokers.pubsub]
+# The image publishes only `latest`, so it is pinned by digest.
+image = "thekevjames/gcloud-pubsub-emulator@sha256:f6480c7380649314faaad79a0fb24c4311ee5ae52442d3100b9e75b7c180c241"
+port = 8681
+env = { PUBSUB_PROJECT1 = "benthos,blobfish" }
+ready_log = "Server started, listening on 8681"
+ready_timeout = 120
+
+# `capture` is used for its side effect: the keyspace and table the case needs.
+[brokers.cassandra]
+image = "cassandra:5.0"
+port = 9042
+env = { MAX_HEAP_SIZE = "512M", HEAP_NEWSIZE = "100M" }
+ready_log = "Starting listening for CQL clients"
+ready_timeout = 240
+capture = { INIT = ["cqlsh", "-e", "CREATE KEYSPACE testspace WITH replication = {'class':'SimpleStrategy','replication_factor':1}; CREATE TABLE testspace.messages (id int primary key, run text);"] }
+
+# The output speaks gRPC; the case reads back over REST.
+[brokers.qdrant]
+image = "qdrant/qdrant:v1.17.0"
+port = 6334
+ports = { REST = 6333 }
+
+[brokers.questdb]
+image = "questdb/questdb:8.0.0"
+port = 9000
+env = { JAVA_OPTS = "-Xms512m -Xmx512m" }
+ready_timeout = 180
+
+# `capture` is used for its side effect: rangefeeds on, and the table.
+[brokers.cockroach]
+image = "cockroachdb/cockroach:v24.3.5"
+port = 26257
+args = ["start-single-node", "--insecure"]
+ready_log = "CockroachDB node starting"
+ready_timeout = 120
+capture = { INIT = ["cockroach", "sql", "--insecure", "-e", "SET CLUSTER SETTING kv.rangefeed.enabled = true", "-e", "CREATE TABLE messages (id INT PRIMARY KEY, run STRING)"] }
+
+# ------------------------------------------------- no broker: run anywhere
+
+[cases.file]
+order = "output_first"
+template = '''
+output:
+  file:
+    path: $DIR/data.jsonl
+    codec: lines
+
+input:
+  file:
+    paths: [ $DIR/data.jsonl ]
+    scanner:
+      lines: {}
+'''
+
+[cases.socket]
+template = '''
+output:
+  socket:
+    network: tcp
+    address: 127.0.0.1:$PORT
+
+input:
+  socket_server:
+    network: tcp
+    address: 127.0.0.1:$PORT
+'''
+
+[cases.http]
+template = '''
+output:
+  http_client:
+    url: http://127.0.0.1:$PORT/post
+    verb: POST
+
+input:
+  http_server:
+    address: 127.0.0.1:$PORT
+    path: /post
+'''
+
+[cases.sqlite]
+order = "output_first"
+template = '''
+output:
+  sql_insert:
+    driver: sqlite
+    dsn: file:$DIR/test.db
+    table: messages
+    columns: [ id, run ]
+    args_mapping: root = [ this.id, this.run ]
+    init_statement: CREATE TABLE IF NOT EXISTS messages (id INTEGER, run TEXT);
+
+input:
+  sql_select:
+    driver: sqlite
+    dsn: file:$DIR/test.db
+    table: messages
+    columns: [ id, run ]
+'''
+
+# upstream: nanomsg/integration_test.go, with `bind` swapped: the publishing
+# `mqb copy` exits once drained, so the side that stays up has to listen.
+[cases.nanomsg]
+vars = { VAR1 = "PUSH", VAR2 = "PULL", VAR3 = "" }
+template = '''
+output:
+  nanomsg:
+    urls:
+      - tcp://127.0.0.1:$PORT
+    bind: false
+    socket_type: $VAR1
+    poll_timeout: 5s
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  nanomsg:
+    urls:
+      - tcp://127.0.0.1:$PORT
+    bind: true
+    socket_type: $VAR2
+    sub_filters: [ $VAR3 ]
+'''
+
+[cases.subprocess]
+order = "output_first"
+template = '''
+output:
+  subprocess:
+    name: sh
+    args: [ -c, "cat >> $DIR/data.jsonl" ]
+    codec: lines
+
+input:
+  subprocess:
+    name: cat
+    args: [ $DIR/data.jsonl ]
+    codec: lines
+'''
+
+[cases.websocket]
+template = '''
+output:
+  websocket:
+    url: ws://127.0.0.1:$PORT/ws
+
+input:
+  http_server:
+    address: 127.0.0.1:$PORT
+    path: /post
+    ws_path: /ws
+'''
+
+[cases.csv]
+order = "output_first"
+template = '''
+output:
+  file:
+    path: $DIR/data.csv
+    codec: lines
+  processors:
+    - mapping: |
+        root = "%v,%v".format(this.id, this.run)
+
+input:
+  csv:
+    paths: [ $DIR/data.csv ]
+    parse_header_row: false
+  processors:
+    - mapping: |
+        root = {"id": this.index(0).number(), "run": this.index(1)}
+'''
+
+[cases.sql_raw]
+order = "output_first"
+template = '''
+output:
+  sql_raw:
+    driver: sqlite
+    dsn: file:$DIR/test.db
+    query: INSERT INTO messages (id, run) VALUES (?, ?);
+    args_mapping: root = [ this.id, this.run ]
+    init_statement: CREATE TABLE IF NOT EXISTS messages (id INTEGER, run TEXT);
+
+input:
+  sql_raw:
+    driver: sqlite
+    dsn: file:$DIR/test.db
+    query: SELECT id, run FROM messages;
+'''
+
+# The wrappers: components that take another component as their child.
+[cases.broker]
+order = "output_first"
+template = '''
+output:
+  broker:
+    pattern: fan_out
+    outputs:
+      - file:
+          path: $DIR/data.jsonl
+          codec: lines
+
+input:
+  broker:
+    inputs:
+      - file:
+          paths: [ $DIR/data.jsonl ]
+          scanner:
+            lines: {}
+'''
+
+# The first output has nothing to connect to, so every message falls through.
+[cases.fallback_sequence]
+order = "output_first"
+template = '''
+output:
+  fallback:
+    - http_client:
+        url: http://127.0.0.1:$PORT/nothing-listens-here
+        retries: 0
+    - file:
+        path: $DIR/data.jsonl
+        codec: lines
+
+input:
+  sequence:
+    inputs:
+      - file:
+          paths: [ $DIR/data.jsonl ]
+          scanner:
+            lines: {}
+'''
+
+# Off: the `switch` output never confirms a delivery through the plugin
+# (docs/TESTING.md, "Known failures"). Uncomment to reproduce.
+# [cases.switch]
+# order = "output_first"
+# template = '''
+# output:
+#   switch:
+#     cases:
+#       - check: this.id > 0
+#         output:
+#           file:
+#             path: $DIR/data.jsonl
+#             codec: lines
+#
+# input:
+#   file:
+#     paths: [ $DIR/data.jsonl ]
+#     scanner:
+#       lines: {}
+# '''
+
+[cases.retry_batched]
+order = "output_first"
+template = '''
+output:
+  retry:
+    output:
+      file:
+        path: $DIR/data.jsonl
+        codec: lines
+
+input:
+  batched:
+    policy:
+      count: 5
+      period: 1s
+    child:
+      file:
+        paths: [ $DIR/data.jsonl ]
+        scanner:
+          lines: {}
+'''
+
+[cases.drop_on_read_until]
+order = "output_first"
+template = '''
+output:
+  drop_on:
+    error: true
+    output:
+      file:
+        path: $DIR/data.jsonl
+        codec: lines
+
+input:
+  read_until:
+    idle_timeout: 2s
+    input:
+      file:
+        paths: [ $DIR/data.jsonl ]
+        scanner:
+          lines: {}
+'''
+
+# The output is the server here: it hands one message to each GET.
+[cases.http_server_output]
+template = '''
+output:
+  http_server:
+    address: 127.0.0.1:$PORT
+    path: /get
+
+input:
+  http_client:
+    url: http://127.0.0.1:$PORT/get
+    verb: GET
+'''
+
+[cases.websocket_input]
+template = '''
+output:
+  http_server:
+    address: 127.0.0.1:$PORT
+    ws_path: /ws
+
+input:
+  websocket:
+    url: ws://127.0.0.1:$PORT/ws
+'''
+
+[cases.dynamic]
+order = "output_first"
+template = '''
+output:
+  dynamic:
+    outputs:
+      a:
+        file:
+          path: $DIR/data.jsonl
+          codec: lines
+
+input:
+  dynamic:
+    inputs:
+      a:
+        file:
+          paths: [ $DIR/data.jsonl ]
+          scanner:
+            lines: {}
+'''
+
+[cases.reject_errored]
+order = "output_first"
+template = '''
+output:
+  reject_errored:
+    file:
+      path: $DIR/data.jsonl
+      codec: lines
+
+input:
+  file:
+    paths: [ $DIR/data.jsonl ]
+    scanner:
+      lines: {}
+'''
+
+[cases.stdio]
+order = "output_first"
+stdio = true
+template = '''
+output:
+  stdout:
+    codec: lines
+
+input:
+  stdin:
+    scanner:
+      lines: {}
+'''
+
+# ------------------------------------------------------------ with broker
+
+# upstream: beanstalkd/integration_test.go
+[cases.beanstalkd]
+broker = "beanstalkd"
+template = '''
+output:
+  beanstalkd:
+    address: 127.0.0.1:$PORT
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  beanstalkd:
+    address: 127.0.0.1:$PORT
+'''
+
+# upstream: redis/integration_test.go
+[cases.redis_streams]
+broker = "redis"
+metadata = true
+template = '''
+output:
+  redis_streams:
+    url: tcp://localhost:$PORT
+    stream: stream-$ID
+    body_key: body
+    max_length: 0
+    max_in_flight: $MAX_IN_FLIGHT
+    metadata:
+      exclude_prefixes: [ $OUTPUT_META_EXCLUDE_PREFIX ]
+
+input:
+  redis_streams:
+    url: tcp://localhost:$PORT
+    body_key: body
+    streams: [ stream-$ID ]
+    limit: 10
+    client_id: client-input-$ID
+    consumer_group: group-$ID
+'''
+
+# upstream: redis/integration_test.go
+[cases.redis_pubsub]
+broker = "redis"
+template = '''
+output:
+  redis_pubsub:
+    url: tcp://localhost:$PORT
+    channel: channel-$ID
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  redis_pubsub:
+    url: tcp://localhost:$PORT
+    channels: [ channel-$ID ]
+'''
+
+# upstream: redis/integration_test.go
+[cases.redis_list]
+broker = "redis"
+template = '''
+output:
+  redis_list:
+    url: tcp://localhost:$PORT
+    key: key-$ID
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  redis_list:
+    url: tcp://localhost:$PORT
+    key: key-$ID
+'''
+
+# upstream: nats/integration_nats_test.go
+[cases.nats]
+broker = "nats"
+template = '''
+output:
+  nats:
+    urls: [ tcp://localhost:$PORT ]
+    subject: subject-$ID
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  nats:
+    urls: [ tcp://localhost:$PORT ]
+    queue: queue-$ID
+    subject: subject-$ID
+    prefetch_count: 1048
+'''
+
+# upstream: nats/integration_jetstream_test.go, which creates the stream with
+# the NATS client; here the input does.
+[cases.nats_jetstream]
+broker = "nats"
+template = '''
+output:
+  nats_jetstream:
+    urls: [ nats://localhost:$PORT ]
+    subject: subject-$ID
+
+input:
+  nats_jetstream:
+    urls: [ nats://localhost:$PORT ]
+    subject: subject-$ID
+    durable: durable-$ID
+    stream: stream-$ID
+    create_stream: true
+'''
+
+# upstream: nats/integration_kv_test.go, which creates the bucket with the NATS
+# client. A bucket is a stream named `KV_<bucket>`, so the setup asks for one.
+[cases.nats_kv]
+broker = "nats"
+setup = '''
+input:
+  generate:
+    count: 1
+    interval: ""
+    mapping: |
+      root = {
+        "name": "KV_bucket-$ID", "subjects": ["$KV.bucket-$ID.>"],
+        "max_msgs_per_subject": 1, "discard": "new", "storage": "memory",
+        "allow_rollup_hdrs": true, "deny_delete": true, "allow_direct": true,
+        "retention": "limits", "num_replicas": 1
+      }
+
+output:
+  nats:
+    urls: [ tcp://localhost:$PORT ]
+    subject: $JS.API.STREAM.CREATE.KV_bucket-$ID
+'''
+template = '''
+output:
+  label: kv_output
+  nats_kv:
+    urls: [ tcp://localhost:$PORT ]
+    bucket: bucket-$ID
+    key: ${! ksuid() }
+
+input:
+  label: kv_input
+  nats_kv:
+    urls: [ tcp://localhost:$PORT ]
+    bucket: bucket-$ID
+'''
+
+# upstream: amqp09/integration_test.go, through the default exchange: upstream
+# opens the output (which declares the exchange) before the input binds to it
+# and only then publishes, an order two `mqb copy` processes cannot keep.
+[cases.amqp_0_9]
+broker = "rabbitmq"
+metadata = true
+vars = { VAR1 = "false" }
+template = '''
+output:
+  amqp_0_9:
+    urls:
+      - amqp://guest:guest@localhost:1234/
+      - amqp://guest:guest@localhost:$PORT/ # fallback URL
+      - amqp://guest:guest@localhost:4567/
+    max_in_flight: $MAX_IN_FLIGHT
+    exchange: ""
+    key: queue-$ID
+    metadata:
+      exclude_prefixes: [ $OUTPUT_META_EXCLUDE_PREFIX ]
+
+input:
+  amqp_0_9:
+    urls:
+      - amqp://guest:guest@localhost:1234/
+      - amqp://guest:guest@localhost:$PORT/ # fallback URL
+      - amqp://guest:guest@localhost:4567/
+    auto_ack: $VAR1
+    queue: queue-$ID
+    queue_declare:
+      durable: true
+      enabled: true
+'''
+
+# upstream: amqp1/integration_test.go, against RabbitMQ 4 rather than ActiveMQ.
+# Its AMQP 1.0 addresses are `/queues/<name>` and the queue has to exist, which
+# the setup arranges over AMQP 0.9; it rejects annotation keys without an `x-`
+# prefix, hence the metadata exclusion.
+[cases.amqp_1]
+broker = "rabbitmq"
+setup = '''
+input:
+  amqp_0_9:
+    urls: [ amqp://guest:guest@localhost:$PORT/ ]
+    queue: queue-$ID
+    queue_declare:
+      durable: true
+      enabled: true
+
+output:
+  drop: {}
+'''
+template = '''
+output:
+  amqp_1:
+    url: amqp://guest:guest@localhost:$PORT/
+    target_address: "/queues/queue-$ID"
+    max_in_flight: $MAX_IN_FLIGHT
+    metadata:
+      exclude_prefixes: [ "" ]
+
+input:
+  amqp_1:
+    url: amqp://guest:guest@localhost:$PORT/
+    source_address: "/queues/queue-$ID"
+'''
+
+# upstream: mqtt/integration_test.go
+[cases.mqtt]
+broker = "mosquitto"
+vars = { VAR1 = "" }
+template = '''
+output:
+  mqtt:
+    urls: [ tcp://localhost:$PORT ]
+    qos: 1
+    topic: topic-$ID
+    client_id: client-output-$ID
+    dynamic_client_id_suffix: "$VAR1"
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  mqtt:
+    urls: [ tcp://localhost:$PORT ]
+    topics: [ topic-$ID ]
+    client_id: client-input-$ID
+    dynamic_client_id_suffix: "$VAR1"
+    clean_session: false
+'''
+
+# upstream: nsq/integration_test.go
+[cases.nsq]
+broker = "nsq"
+template = '''
+output:
+  nsq:
+    nsqd_tcp_address: localhost:$PORT
+    topic: topic-$ID
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  nsq:
+    nsqd_tcp_addresses: [ localhost:$PORT ]
+    lookupd_http_addresses: []
+    topic: topic-$ID
+    channel: channel-$ID
+    max_in_flight: 100
+    max_attempts: 5
+'''
+
+# upstream: pulsar/integration_test.go
+[cases.pulsar]
+broker = "pulsar"
+timeout = 60
+settle = 5
+template = '''
+output:
+  pulsar:
+    url: pulsar://localhost:$PORT/
+    topic: "topic-$ID"
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  pulsar:
+    url: pulsar://localhost:$PORT/
+    topics: [ "topic-$ID" ]
+    subscription_name: "sub-$ID"
+'''
+
+[cases.mongodb]
+broker = "mongodb"
+order = "output_first"
+template = '''
+output:
+  mongodb:
+    url: mongodb://localhost:$PORT
+    database: test
+    collection: c$ID
+    operation: insert-one
+    document_map: root = this
+
+input:
+  mongodb:
+    url: mongodb://localhost:$PORT
+    database: test
+    collection: c$ID
+    query: root.run = "$ID"
+    json_marshal_mode: relaxed
+  processors:
+    - mapping: root = this.without("_id")
+'''
+
+[cases.postgres]
+broker = "postgres"
+order = "output_first"
+template = '''
+output:
+  sql_insert:
+    driver: postgres
+    dsn: postgres://testuser:testpass@localhost:$PORT/testdb?sslmode=disable
+    table: m$ID
+    columns: [ id, run ]
+    args_mapping: root = [ this.id, this.run ]
+    init_statement: CREATE TABLE IF NOT EXISTS m$ID (id INTEGER, run TEXT);
+
+input:
+  sql_select:
+    driver: postgres
+    dsn: postgres://testuser:testpass@localhost:$PORT/testdb?sslmode=disable
+    table: m$ID
+    columns: [ id, run ]
+'''
+
+# The `cache` output into Redis, read back by scanning its keys.
+[cases.redis_scan]
+broker = "redis"
+order = "output_first"
+template = '''
+output:
+  cache:
+    target: redis
+    key: key-$ID-${! json("id") }
+
+cache_resources:
+  - label: redis
+    redis:
+      url: tcp://localhost:$PORT
+
+input:
+  redis_scan:
+    url: tcp://localhost:$PORT
+    match: key-$ID-*
+  processors:
+    - mapping: root = this.value.parse_json()
+'''
+
+[cases.postgres_raw]
+broker = "postgres"
+order = "output_first"
+template = '''
+output:
+  sql_raw:
+    driver: postgres
+    dsn: postgres://testuser:testpass@localhost:$PORT/testdb?sslmode=disable
+    query: INSERT INTO r$ID (id, run) VALUES ($1, $2);
+    args_mapping: root = [ this.id, this.run ]
+    init_statement: CREATE TABLE IF NOT EXISTS r$ID (id INTEGER, run TEXT);
+
+input:
+  sql_raw:
+    driver: postgres
+    dsn: postgres://testuser:testpass@localhost:$PORT/testdb?sslmode=disable
+    query: SELECT id, run FROM r$ID;
+'''
+
+# upstream: sftp/integration_test.go
+[cases.sftp]
+broker = "sftp"
+order = "output_first"
+template = '''
+output:
+  sftp:
+    address: localhost:$PORT
+    path: /upload/test-$ID/${! json("id") }.txt
+    credentials:
+      username: foo
+      password: pass
+      host_public_key: $HOST_KEY
+    codec: all-bytes
+    max_in_flight: 1
+
+input:
+  sftp:
+    address: localhost:$PORT
+    paths:
+      - /upload/test-$ID/*.txt
+    credentials:
+      username: foo
+      password: pass
+      host_public_key: $HOST_KEY
+    scanner:
+      to_the_end: {}
+'''
+
+# No input reads a hash: `generate` names the keys and the `redis` processor
+# fetches them. `fields` rather than `walk_json_object`, which cannot write a
+# JSON number.
+[cases.redis_hash]
+broker = "redis"
+order = "output_first"
+template = '''
+output:
+  redis_hash:
+    url: tcp://localhost:$PORT
+    key: key-$ID-${! json("id") }
+    fields:
+      id: ${! json("id") }
+      run: ${! json("run") }
+
+input:
+  generate:
+    count: 10
+    interval: ""
+    mapping: root = counter()
+  processors:
+    - redis:
+        url: tcp://localhost:$PORT
+        command: hgetall
+        args_mapping: root = [ "key-$ID-%v".format(this) ]
+    - mutation: root.id = this.id.number()
+'''
+
+# upstream: azure/integration_test.go, against Azurite, whose account key is
+# the published development one.
+[cases.azure_blob_storage]
+broker = "azurite_blob"
+order = "output_first"
+template = '''
+output:
+  azure_blob_storage:
+    blob_type: BLOCK
+    container: c-$ID
+    max_in_flight: 1
+    path: test/${!counter()}.txt
+    public_access_level: PRIVATE
+    storage_connection_string: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:$PORT/devstoreaccount1;
+
+input:
+  azure_blob_storage:
+    container: c-$ID
+    prefix: test
+    storage_connection_string: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:$PORT/devstoreaccount1;
+'''
+
+[cases.azure_queue_storage]
+broker = "azurite_queue"
+template = '''
+output:
+  azure_queue_storage:
+    queue_name: q$ID
+    storage_connection_string: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;QueueEndpoint=http://127.0.0.1:$PORT/devstoreaccount1;
+
+input:
+  azure_queue_storage:
+    queue_name: q$ID
+    storage_connection_string: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;QueueEndpoint=http://127.0.0.1:$PORT/devstoreaccount1;
+'''
+
+# The entity comes back with its keys and timestamp beside the stored fields.
+[cases.azure_table_storage]
+broker = "azurite_table"
+order = "output_first"
+template = '''
+output:
+  azure_table_storage:
+    table_name: t$ID
+    partition_key: p
+    row_key: ${! json("id") }
+    storage_connection_string: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;TableEndpoint=http://127.0.0.1:$PORT/devstoreaccount1;
+
+input:
+  azure_table_storage:
+    table_name: t$ID
+    storage_connection_string: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;TableEndpoint=http://127.0.0.1:$PORT/devstoreaccount1;
+'''
+
+# upstream: nats/integration_stream_test.go
+[cases.nats_stream]
+broker = "nats_streaming"
+template = '''
+output:
+  nats_stream:
+    urls: [ nats://localhost:$PORT ]
+    cluster_id: test-cluster
+    client_id: client-output-$ID
+    subject: subject-$ID
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  nats_stream:
+    urls: [ nats://localhost:$PORT ]
+    cluster_id: test-cluster
+    client_id: client-input-$ID
+    queue: queue-$ID
+    subject: subject-$ID
+    ack_wait: 5s
+'''
+
+# upstream: gcp/integration_test.go; the bucket is created over the JSON API.
+[cases.gcp_cloud_storage]
+broker = "fake_gcs"
+order = "output_first"
+env = { STORAGE_EMULATOR_HOST = "localhost:$PORT" }
+setup = '''
+input:
+  generate:
+    count: 1
+    interval: ""
+    mapping: |
+      root = {"name": "b-$ID"}
+
+output:
+  http_client:
+    url: http://localhost:$PORT/storage/v1/b?project=test
+    verb: POST
+    headers:
+      Content-Type: application/json
+'''
+template = '''
+output:
+  gcp_cloud_storage:
+    bucket: b-$ID
+    path: test/${!counter()}.txt
+    max_in_flight: 1
+    collision_mode: overwrite
+
+input:
+  gcp_cloud_storage:
+    bucket: b-$ID
+    prefix: test
+'''
+
+# upstream: gcp/integration_pubsub_test.go, on the topic the emulator creates.
+[cases.gcp_pubsub]
+broker = "pubsub"
+env = { PUBSUB_EMULATOR_HOST = "localhost:$PORT" }
+settle = 4
+template = '''
+output:
+  gcp_pubsub:
+    project: benthos
+    topic: blobfish
+    max_in_flight: $MAX_IN_FLIGHT
+
+input:
+  gcp_pubsub:
+    project: benthos
+    subscription: sub-$ID
+    create_subscription:
+      enabled: true
+      topic: blobfish
+'''
+
+# upstream: cassandra/integration_test.go, read back with the input.
+[cases.cassandra]
+broker = "cassandra"
+order = "output_first"
+template = '''
+output:
+  cassandra:
+    addresses:
+      - localhost:$PORT
+    disable_initial_host_lookup: true
+    query: 'INSERT INTO testspace.messages JSON ?'
+    args_mapping: 'root = [ this ]'
+
+input:
+  cassandra:
+    addresses:
+      - localhost:$PORT
+    disable_initial_host_lookup: true
+    query: 'SELECT * FROM testspace.messages'
+'''
+
+# upstream: qdrant/integration_test.go, read back by scrolling the collection.
+# 127.0.0.1, as the gRPC client hangs on `localhost` when only IPv4 is mapped;
+# the payload is rebuilt because the output cannot coerce a JSON number.
+[cases.qdrant]
+broker = "qdrant"
+order = "output_first"
+setup = '''
+input:
+  generate:
+    count: 1
+    interval: ""
+    mapping: |
+      root = {"vectors": {"size": 3, "distance": "Cosine"}}
+
+output:
+  http_client:
+    url: http://localhost:$REST/collections/c$ID
+    verb: PUT
+    headers:
+      Content-Type: application/json
+'''
+template = '''
+output:
+  qdrant:
+    grpc_host: 127.0.0.1:$PORT
+    tls: {enabled: false}
+    id: root = json("id")
+    collection_name: c$ID
+    vector_mapping: root = [0.352, 0.532, 0.532]
+    payload_mapping: 'root = {"id": this.id.number().round(), "run": this.run}'
+
+input:
+  http_client:
+    url: http://localhost:$REST/collections/c$ID/points/scroll
+    verb: POST
+    headers:
+      Content-Type: application/json
+    payload: '{"limit": 100, "with_payload": true}'
+  processors:
+    - mapping: root = this.result.points.map_each(p -> p.payload)
+    - unarchive:
+        format: json_array
+'''
+
+# upstream: questdb/integration_test.go, read back with a query over HTTP.
+[cases.questdb]
+broker = "questdb"
+order = "output_first"
+template = '''
+output:
+  questdb:
+    address: localhost:$PORT
+    table: t$ID
+
+input:
+  http_client:
+    url: http://localhost:$PORT/exec?query=select%20id%2C%20run%20from%20t$ID
+    verb: GET
+  processors:
+    - mapping: |
+        root = this.dataset.map_each(r -> {"id": r.index(0), "run": r.index(1)})
+    - unarchive:
+        format: json_array
+'''
+
+# The rows are written with `sql_raw`; the changefeed starts with a scan of them.
+[cases.cockroachdb_changefeed]
+broker = "cockroach"
+order = "output_first"
+template = '''
+output:
+  sql_raw:
+    driver: postgres
+    dsn: postgres://root@localhost:$PORT/defaultdb?sslmode=disable
+    query: INSERT INTO messages (id, run) VALUES ($1, $2);
+    args_mapping: root = [ this.id, this.run ]
+
+input:
+  cockroachdb_changefeed:
+    dsn: postgres://root@localhost:$PORT/defaultdb?sslmode=disable
+    tables:
+      - messages
+  processors:
+    - mapping: root = this.row.parse_json().after
+'''
+
+# ------------------------------------------- processors as middlewares
+
+[middlewares.connect_mapping]
+input = ['{"id":1,"name":"a"}', '{"id":2,"name":"drop"}']
+middlewares = [{ connect_mapping = 'root = if this.name == "drop" { deleted() } else { this.merge({"seen": true}) }' }]
+expect = ['{"id":1,"name":"a","seen":true}']
+
+[middlewares.connect_mapping_throw]
+input = ['{"id":1}']
+middlewares = [{ connect_mapping = 'root = throw("bad input")' }]
+error = "bad input"
+
+[middlewares.connect_mutation]
+input = ['{"id":1,"name":"a"}']
+middlewares = [{ connect_mutation = 'root.name = this.name.uppercase()' }]
+expect = ['{"id":1,"name":"A"}']
+
+[middlewares.connect_bloblang]
+input = ['{"id":1,"name":"a"}']
+middlewares = [{ connect_bloblang = 'root = this.name' }]
+expect = ["a"]
+
+[middlewares.connect_jq]
+input = ['{"id":1,"name":"a"}']
+middlewares = [{ connect_jq = { query = ".name" } }]
+expect = ['"a"']
+
+[middlewares.connect_jmespath]
+input = ['{"id":1,"name":"a"}']
+middlewares = [{ connect_jmespath = { query = "name" } }]
+expect = ['"a"']
+
+[middlewares.connect_grok]
+input = ["GET 200"]
+middlewares = [{ connect_grok = { expressions = ["%{WORD:verb} %{NUMBER:code}"] } }]
+expect = ['{"verb":"GET","code":"200"}']
+
+[middlewares.connect_parse_log]
+input = ["<34>Oct 11 22:14:15 mymachine su: failed"]
+middlewares = [
+  # Listed first, applied last: the year of an RFC 3164 timestamp is a guess.
+  { connect_mapping = 'root = this.without("timestamp")' },
+  { connect_parse_log = { format = "syslog_rfc3164" } },
+]
+expect = ['{"appname":"su","facility":4,"hostname":"mymachine","message":"failed","priority":34,"severity":2}']
+
+[middlewares.connect_json_schema]
+input = ['{"id":1}']
+middlewares = [{ connect_json_schema = { schema = '{"type":"object","required":["id"]}' } }]
+expect = ['{"id":1}']
+
+[middlewares.connect_json_schema_rejects]
+input = ['{"id":1}']
+middlewares = [{ connect_json_schema = { schema = '{"type":"object","required":["name"]}' } }]
+error = "name is required"
+
+# An input's middlewares apply last to first, so the encoder is listed second.
+[middlewares.connect_msgpack]
+input = ['{"id":1,"name":"a"}']
+middlewares = [
+  { connect_msgpack = { operator = "to_json" } },
+  { connect_msgpack = { operator = "from_json" } },
+]
+expect = ['{"id":1,"name":"a"}']
+
+[middlewares.connect_avro]
+input = ['{"id":1,"name":"a"}']
+middlewares = [
+  { connect_avro = { operator = "to_json", schema = '{"type":"record","name":"r","fields":[{"name":"id","type":"long"},{"name":"name","type":"string"}]}' } },
+  { connect_avro = { operator = "from_json", schema = '{"type":"record","name":"r","fields":[{"name":"id","type":"long"},{"name":"name","type":"string"}]}' } },
+]
+expect = ['{"id":1,"name":"a"}']
+
+[middlewares.connect_javascript]
+input = ["a"]
+middlewares = [{ connect_javascript = { code = "benthos.v0_msg_set_string(benthos.v0_msg_as_string() + '!');" } }]
+expect = ["a!"]
+
+[middlewares.connect_branch]
+input = ['{"id":1,"name":"a"}']
+middlewares = [{ connect_branch = { request_map = "root = this.name", processors = [{ mapping = "root = content().uppercase()" }], result_map = "root.upper = content().string()" } }]
+expect = ['{"id":1,"name":"a","upper":"A"}']
+
+# The second message has the first one's key, so it gets the cached result.
+[middlewares.connect_cached]
+input = ['{"id":1,"name":"a"}', '{"id":1,"name":"b"}', '{"id":2,"name":"c"}']
+middlewares = [{ connect_cached = { cache = { memory = {} }, key = '${! json("id") }', processors = [{ mapping = "root = this.name" }] } }]
+expect = ["a", "a", "c"]
+
+[middlewares.connect_dedupe]
+input = ['{"id":1,"name":"a"}', '{"id":1,"name":"again"}', '{"id":2,"name":"b"}']
+middlewares = [{ connect_dedupe = { key = '${! json("id") }', cache = { memory = {} } } }]
+expect = ['{"id":1,"name":"a"}', '{"id":2,"name":"b"}']
+
+[middlewares.connect_log]
+input = ['{"id":1}']
+middlewares = [{ connect_log = { message = 'seen ${! json("id") }' } }]
+expect = ['{"id":1}']
+
+[middlewares.connect_http]
+input = ["hello"]
+middlewares = [{ connect_http = { url = "http://127.0.0.1:$HTTP/", verb = "POST" } }]
+expect = ["HELLO"]
+
+# The chain: any processor, several per call, sharing a resource by label.
+[middlewares.connect]
+input = ['{"id":1,"name":"a"}', '{"id":1,"name":"again"}']
+expect = ["a"]
+[[middlewares.connect.middlewares]]
+[middlewares.connect.middlewares.connect]
+processors = [
+  { dedupe = { cache = "seen", key = '${! json("id") }' } },
+  { msgpack = { operator = "from_json" } },
+  { msgpack = { operator = "to_json" } },
+  { mapping = "root = this.name" },
+]
+cache_resources = [{ label = "seen", memory = { default_ttl = "5m" } }]
+
+# A processor that splits a message cannot be a middleware.
+[middlewares.connect_rejects_fan_out]
+input = ["one"]
+middlewares = [{ connect = { processors = [{ mapping = 'root = "one\ntwo"' }, { unarchive = { format = "lines" } }] } }]
+error = "pipeline"
+
+# Listed decoder first: an input's middlewares apply last to first.
+[middlewares.connect_schema_registry]
+input = ['{"id":1,"name":"a"}']
+middlewares = [
+  { connect_schema_registry_decode = { url = "http://127.0.0.1:$HTTP" } },
+  { connect_schema_registry_encode = { url = "http://127.0.0.1:$HTTP", subject = "s" } },
+]
+expect = ['{"id":1,"name":"a"}']
+
+# ---------------------------- other processors, through the `connect` chain
+
+[middlewares.processor_compress]
+input = ["hello"]
+middlewares = [{ connect = { processors = [{ compress = { algorithm = "gzip" } }, { decompress = { algorithm = "gzip" } }] } }]
+expect = ["hello"]
+
+[middlewares.processor_bounds_check]
+input = ["ab", "abcd"]
+middlewares = [{ connect = { processors = [{ bounds_check = { min_part_size = 3 } }] } }]
+expect = ["abcd"]
+
+[middlewares.processor_try_catch]
+input = ["a"]
+middlewares = [{ connect = { processors = [
+  { try = [{ mapping = 'root = throw("no")' }, { mapping = 'root = "skipped"' }] },
+  { catch = [{ mapping = 'root = "caught"' }] },
+] } }]
+expect = ["caught"]
+
+[middlewares.processor_switch]
+input = ['{"id":1}', '{"id":2}']
+middlewares = [{ connect = { processors = [{ switch = [
+  { check = "this.id == 1", processors = [{ mutation = 'root.kind = "one"' }] },
+  { processors = [{ mutation = 'root.kind = "other"' }] },
+] }] } }]
+expect = ['{"id":1,"kind":"one"}', '{"id":2,"kind":"other"}']
+
+[middlewares.processor_for_each]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ for_each = [{ mapping = "root = content().uppercase()" }] }] } }]
+expect = ["A"]
+
+[middlewares.processor_while]
+input = ['{"n":0}']
+middlewares = [{ connect = { processors = [{ while = { check = "this.n < 3", processors = [{ mapping = "root.n = this.n + 1" }] } }] } }]
+expect = ['{"n":3}']
+
+[middlewares.processor_retry]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ retry = { max_retries = 1, processors = [{ mapping = "root = content().uppercase()" }] } }] } }]
+expect = ["A"]
+
+[middlewares.processor_parallel]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ parallel = { processors = [{ mapping = "root = content().uppercase()" }] } }] } }]
+expect = ["A"]
+
+[middlewares.processor_processors]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ processors = [{ noop = {} }, { sleep = { duration = "1ms" } }, { select_parts = { parts = [0] } }, { mapping = "root = content().uppercase()" }] }] } }]
+expect = ["A"]
+
+[middlewares.processor_workflow]
+input = ['{"id":1}']
+middlewares = [{ connect = { processors = [{ workflow = { meta_path = "", branches = { double = { request_map = "root = this.id", processors = [{ mapping = "root = this * 2" }], result_map = "root.double = this" } } } }] } }]
+expect = ['{"id":1,"double":2}']
+
+[middlewares.processor_cache]
+input = ["a"]
+expect = ["a"]
+[[middlewares.processor_cache.middlewares]]
+[middlewares.processor_cache.middlewares.connect]
+processors = [
+  { cache = { resource = "c", operator = "set", key = "k", value = "${! content() }" } },
+  { mapping = 'root = "gone"' },
+  { cache = { resource = "c", operator = "get", key = "k" } },
+]
+cache_resources = [{ label = "c", memory = {} }]
+
+[middlewares.processor_rate_limit]
+input = ["a", "b"]
+expect = ["a", "b"]
+[[middlewares.processor_rate_limit.middlewares]]
+[middlewares.processor_rate_limit.middlewares.connect]
+processors = [{ rate_limit = { resource = "r" } }]
+rate_limit_resources = [{ label = "r", local = { count = 100, interval = "1s" } }]
+
+[middlewares.processor_metric]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ metric = { type = "counter", name = "seen" } }] } }]
+expect = ["a"]
+
+[middlewares.processor_command]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ command = { name = "tr", args_mapping = '["a-z", "A-Z"]' } }] } }]
+expect = ["A"]
+
+[middlewares.processor_subprocess]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ subprocess = { name = "cat" } }] } }]
+expect = ["a"]
+
+[middlewares.processor_sql]
+input = ['{"id":1,"name":"a"}']
+middlewares = [{ connect = { processors = [
+  { sql_raw = { driver = "sqlite", dsn = "file:$DIR/p.db", query = "INSERT INTO t (id, name) VALUES (?, ?)", args_mapping = "root = [ this.id, this.name ]", exec_only = true, init_statement = "CREATE TABLE t (id INTEGER, name TEXT);" } },
+  { sql_insert = { driver = "sqlite", dsn = "file:$DIR/p.db", table = "t", columns = ["id", "name"], args_mapping = 'root = [ 2, "b" ]' } },
+  { sql_select = { driver = "sqlite", dsn = "file:$DIR/p.db", table = "t", columns = ["name"], suffix = "ORDER BY id" } },
+] } }]
+expect = ['[{"name":"a"},{"name":"b"}]']
