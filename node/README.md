@@ -52,7 +52,7 @@ generate_to_file:
   output:
     file:
       path: "out.jsonl"
-`);
+`, "generate_to_file");
 route.start();
 route.join(); // block until the route stops
 ```

@@ -33,8 +33,8 @@ generate_to_file:
   output:
     file:
       path: "out.jsonl"
-""")
-route.start()
+""", "generate_to_file")
+route.run()   # blocks until the generator is exhausted
 ```
 
 `register()` returns the endpoint name (`connect`) and is a no-op when called

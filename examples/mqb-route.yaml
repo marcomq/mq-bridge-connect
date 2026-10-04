@@ -12,9 +12,10 @@
 #
 # The same file runs unchanged in the desktop UI and behind the Python and
 # Node bindings — one config format, three ways to run it.
-
-plugins:
-  - "${MQB_PLUGIN_DIR}/libmq_bridge_connect.dylib"
+#
+# The `connect` endpoints below make mq-bridge find the plugin under
+# `MQB_PLUGIN_DIR`. A route that uses only `connect_*` middlewares has to load
+# it up front instead: `plugins: ["/path/to/libmq_bridge_connect.so"]`.
 
 routes:
   connect_demo:

@@ -76,7 +76,7 @@ For the Python and Node.js bindings of mq-bridge, call `register()` from the
 language package before starting routes:
 
 ```console
-pip install mq-bridge mq-bridge-connect     # wheel includes both libraries
+pip install mq-bridge mq-bridge-connect  # wheel includes both libraries
 npm install mq-bridge mq-bridge-connect     # downloads them on first use, see node/README.md
 ```
 
@@ -235,7 +235,7 @@ component, and form A moves them to the top level of the document (see below).
 is read as that component's:
 
 ```sh
-mq-bridge --input 'connect+mqtt://localhost:1883/orders' --output 'file:///tmp/out.jsonl'
+mqb copy 'connect+mqtt://localhost:1883/orders' 'file:///tmp/out.jsonl'
 ```
 
 That is the same configuration as the first example above. The authority is the

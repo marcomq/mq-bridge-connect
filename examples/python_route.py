@@ -71,7 +71,7 @@ def handle(message):
 def main() -> None:
     OUTPUT.unlink(missing_ok=True)
 
-    route = mq_bridge.Route.from_yaml_str(CONFIG, "connect_demo").with_handler(handle)
+    route = mq_bridge.Route.from_str(CONFIG, "connect_demo").with_handler(handle)
     # start() deploys on a background thread and returns; run() blocks instead.
     route.start()
     try:
