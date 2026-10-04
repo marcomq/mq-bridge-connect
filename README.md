@@ -465,7 +465,7 @@ cloud connectors, Elasticsearch, OpenSearch and the rest — has not
 been run through this boundary.
 
 All 18 [processor middlewares](#processors-as-middlewares) and the `connect`
-chain are run end to end, and through the chain 23 more processors, 41 of the
+chain are run end to end, and through the chain 31 more processors, 49 of the
 68 linked:
 
 | Processors | Run as | What is checked |
@@ -477,15 +477,18 @@ chain are run end to end, and through the chain 23 more processors, 41 of the
 | `http`, `branch`, `cached`, `javascript` | `connect_<processor>` | the enriched payload; `cached` answers a repeated key from its cache |
 | `dedupe`, `log` | `connect_<processor>` | a repeated key is dropped; a logged message passes unchanged |
 | `compress`, `decompress`, `bounds_check`, `select_parts`, `noop`, `sleep`, `metric` | `connect` chain | the payload after the chain; `bounds_check` drops a short message |
-| `try`, `catch`, `switch`, `for_each`, `while`, `retry`, `parallel`, `processors`, `workflow` | `connect` chain | the payload their child processors produce |
-| `cache`, `rate_limit` | `connect` chain | with a `cache_resources` / `rate_limit_resources` entry |
+| `try`, `catch`, `try_catch`, `switch`, `for_each`, `while`, `retry`, `parallel`, `processors`, `workflow` | `connect` chain | the payload their child processors produce |
+| `string_split`, `text_chunker`, `sync_response` | `connect` chain | the split payload as an array; a text shorter than one chunk, and a synced message, pass unchanged |
+| `archive`, `group_by`, `group_by_value` | `connect` chain | a batch of one message only: the archived array, the payload of the matching group |
+| `cache`, `rate_limit` | `connect` chain | with a `cache_resources` / `rate_limit_resources` entry; the caches `memory`, `lru`, `ttlru`, `ristretto` and `multilevel` |
 | `command`, `subprocess` | `connect` chain | the payload piped through `tr` and `cat` |
+| `wasm` | `connect` chain | the payload uppercased by a module that reads and rewrites it |
 | `sql_raw`, `sql_insert`, `sql_select` | `connect` chain | rows written to and read from SQLite |
 
-`unarchive` is run only to show that a processor splitting a message rejects
-the batch. The other 27, among them `redis`, `mongodb`, `nats_kv`,
-`nats_request_reply`, `wasm` and the `archive` / `split` / `group_by` family
-that cannot be a middleware, are not run.
+`unarchive` and `insert_part` are run only to show that a processor adding
+messages rejects the batch, as `text_chunker` does on a text longer than one
+chunk. The other 17, among them `redis`, `mongodb`, `nats_kv`,
+`nats_request_reply` and `split`, are not run.
 
 To cover another component, paste its `output:` / `input:` template from
 upstream into [`tests/endpoints/cases.toml`](tests/endpoints/cases.toml), name

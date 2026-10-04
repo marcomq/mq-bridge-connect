@@ -319,7 +319,8 @@ def run_middleware(name: str, case: dict, args, workdir: pathlib.Path, http_port
     case_dir.mkdir()
     source, received, log_path = (case_dir / n for n in ("in.txt", "out.jsonl", "mqb.log"))
     source.write_text("".join(line + "\n" for line in case["input"]))
-    middlewares = json.loads(substitute(json.dumps(case["middlewares"]), {"HTTP": http_port, "DIR": case_dir}))
+    values = {"HTTP": http_port, "DIR": case_dir, "FIXTURES": HERE / "fixtures"}
+    middlewares = json.loads(substitute(json.dumps(case["middlewares"]), values))
     route = {
         "concurrency": 1,
         "input": {"file": {"path": str(source)}, "middlewares": middlewares},

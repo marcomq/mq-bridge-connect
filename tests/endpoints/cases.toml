@@ -23,7 +23,7 @@
 # `expect` (unordered; JSON compared by value). `error` instead expects the
 # batch to be rejected with a message containing it. $HTTP is the port of a
 # server that answers a POST with its body uppercased; $DIR is a scratch
-# directory.
+# directory, $FIXTURES the `fixtures` directory next to this file.
 
 # ---------------------------------------------------------------- brokers
 
@@ -1377,3 +1377,109 @@ middlewares = [{ connect = { processors = [
   { sql_select = { driver = "sqlite", dsn = "file:$DIR/p.db", table = "t", columns = ["name"], suffix = "ORDER BY id" } },
 ] } }]
 expect = ['[{"name":"a"},{"name":"b"}]']
+
+[middlewares.processor_try_catch_block]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ try_catch = { processors = [{ mapping = 'root = throw("no")' }], catch = [{ mapping = 'root = "caught"' }] } }] } }]
+expect = ["caught"]
+
+[middlewares.processor_string_split]
+input = ["a,b"]
+middlewares = [{ connect = { processors = [{ string_split = { delimiter = "," } }] } }]
+expect = ['["a","b"]']
+
+[middlewares.processor_text_chunker]
+input = ["hello"]
+middlewares = [{ connect = { processors = [{ text_chunker = { strategy = "recursive_character", chunk_size = 100, chunk_overlap = 0 } }] } }]
+expect = ["hello"]
+
+# Like `unarchive`: more messages out than in cannot be a middleware.
+[middlewares.processor_text_chunker_rejects_fan_out]
+input = ["hello world"]
+middlewares = [{ connect = { processors = [{ text_chunker = { strategy = "recursive_character", chunk_size = 6, chunk_overlap = 0 } }] } }]
+error = "pipeline"
+
+# A batch of one: these reshape a batch, which a middleware must not.
+[middlewares.processor_archive]
+input = ['{"id":1}']
+middlewares = [{ connect = { processors = [{ archive = { format = "json_array" } }] } }]
+expect = ['[{"id":1}]']
+
+[middlewares.processor_group_by]
+input = ['{"id":1}']
+middlewares = [{ connect = { processors = [{ group_by = [{ check = "this.id == 1", processors = [{ mutation = 'root.kind = "one"' }] }] }] } }]
+expect = ['{"id":1,"kind":"one"}']
+
+[middlewares.processor_group_by_value]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ group_by_value = { value = "${! content() }" } }] } }]
+expect = ["a"]
+
+[middlewares.processor_insert_part_rejects_fan_out]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ insert_part = { content = "b" } }] } }]
+error = "pipeline"
+
+[middlewares.processor_sync_response]
+input = ["a"]
+middlewares = [{ connect = { processors = [{ sync_response = {} }] } }]
+expect = ["a"]
+
+# The cache types that need no server, behind the `cache` processor.
+[middlewares.processor_cache_lru]
+input = ["a"]
+expect = ["a"]
+[[middlewares.processor_cache_lru.middlewares]]
+[middlewares.processor_cache_lru.middlewares.connect]
+processors = [
+  { cache = { resource = "c", operator = "set", key = "k", value = "${! content() }" } },
+  { mapping = 'root = "gone"' },
+  { cache = { resource = "c", operator = "get", key = "k" } },
+]
+cache_resources = [{ label = "c", lru = {} }]
+
+[middlewares.processor_cache_ttlru]
+input = ["a"]
+expect = ["a"]
+[[middlewares.processor_cache_ttlru.middlewares]]
+[middlewares.processor_cache_ttlru.middlewares.connect]
+processors = [
+  { cache = { resource = "c", operator = "set", key = "k", value = "${! content() }" } },
+  { mapping = 'root = "gone"' },
+  { cache = { resource = "c", operator = "get", key = "k" } },
+]
+cache_resources = [{ label = "c", ttlru = {} }]
+
+[middlewares.processor_cache_ristretto]
+input = ["a"]
+expect = ["a"]
+[[middlewares.processor_cache_ristretto.middlewares]]
+[middlewares.processor_cache_ristretto.middlewares.connect]
+processors = [
+  { cache = { resource = "c", operator = "set", key = "k", value = "${! content() }" } },
+  { mapping = 'root = "gone"' },
+  { cache = { resource = "c", operator = "get", key = "k" } },
+]
+cache_resources = [{ label = "c", ristretto = {} }]
+
+[middlewares.processor_cache_multilevel]
+input = ["a"]
+expect = ["a"]
+[[middlewares.processor_cache_multilevel.middlewares]]
+[middlewares.processor_cache_multilevel.middlewares.connect]
+processors = [
+  { cache = { resource = "c", operator = "set", key = "k", value = "${! content() }" } },
+  { mapping = 'root = "gone"' },
+  { cache = { resource = "c", operator = "get", key = "k" } },
+]
+cache_resources = [
+  { label = "c", multilevel = ["hot", "cold"] },
+  { label = "hot", memory = {} },
+  { label = "cold", lru = {} },
+]
+
+# fixtures/upper.wat, compiled: reads the message and writes it back uppercased.
+[middlewares.processor_wasm]
+input = ["hello"]
+middlewares = [{ connect = { processors = [{ wasm = { module_path = "$FIXTURES/upper.wasm" } }] } }]
+expect = ["HELLO"]
