@@ -1267,15 +1267,6 @@ input = ["one"]
 middlewares = [{ connect = { processors = [{ mapping = 'root = "one\ntwo"' }, { unarchive = { format = "lines" } }] } }]
 error = "pipeline"
 
-# Listed decoder first: an input's middlewares apply last to first.
-[middlewares.connect_schema_registry]
-input = ['{"id":1,"name":"a"}']
-middlewares = [
-  { connect_schema_registry_decode = { url = "http://127.0.0.1:$HTTP" } },
-  { connect_schema_registry_encode = { url = "http://127.0.0.1:$HTTP", subject = "s" } },
-]
-expect = ['{"id":1,"name":"a"}']
-
 # ---------------------------- other processors, through the `connect` chain
 
 [middlewares.processor_compress]

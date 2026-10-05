@@ -43,7 +43,7 @@ stops applying fails rather than vanishing.
 failure is fixed and CI is green on both.
 
 **What still gates the next status, and why you should test first.** The
-table covers 27 of the 114 endpoint components and the
+table covers 27 of the 124 endpoint components and the
 [round trips](#endpoint-round-trips) bring that to 81, all of them in CI,
 so the connector you are about to use may well be one of the other 33. The
 risk is no longer that this does not build — it is that your connector has
@@ -118,9 +118,7 @@ broker that cannot start fails the job, on macOS the runner has no Docker and
 the broker cases are skipped.
 
 It checks delivery, not redelivery or acknowledgement — that is the
-conformance suite's job. The schema registry behind
-`connect_schema_registry_decode` and `_encode` is a stub in the runner that
-serves one Avro schema.
+conformance suite's job.
 
 ### Known failures
 

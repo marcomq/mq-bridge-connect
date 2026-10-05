@@ -6,6 +6,7 @@
 package components
 
 import (
+	_ "github.com/redpanda-data/connect/v4/mqbridge/unwrapped"
 	_ "github.com/redpanda-data/connect/v4/public/components/amqp09"
 	_ "github.com/redpanda-data/connect/v4/public/components/amqp1"
 	_ "github.com/redpanda-data/connect/v4/public/components/arc"
@@ -15,7 +16,6 @@ import (
 	_ "github.com/redpanda-data/connect/v4/public/components/cassandra"
 	_ "github.com/redpanda-data/connect/v4/public/components/changelog"
 	_ "github.com/redpanda-data/connect/v4/public/components/cockroachdb"
-	_ "github.com/redpanda-data/connect/v4/public/components/confluent"
 	_ "github.com/redpanda-data/connect/v4/public/components/couchbase"
 	_ "github.com/redpanda-data/connect/v4/public/components/crypto"
 	_ "github.com/redpanda-data/connect/v4/public/components/cyborgdb"
@@ -56,7 +56,6 @@ import (
 	_ "github.com/redpanda-data/connect/v4/public/components/sql"
 	_ "github.com/redpanda-data/connect/v4/public/components/statsd"
 	_ "github.com/redpanda-data/connect/v4/public/components/text"
-	_ "github.com/redpanda-data/connect/v4/public/components/timeplus"
 	_ "github.com/redpanda-data/connect/v4/public/components/twitter"
 	_ "github.com/redpanda-data/connect/v4/public/components/wasm"
 	_ "github.com/redpanda-data/connect/v4/public/components/zeromq"

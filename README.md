@@ -23,7 +23,7 @@ its job. Redpanda supplies only the I/O components.
 >
 > Messages cross the boundary in both directions, payloads and metadata survive
 > both ways, and an mq-bridge nack rejects the one source message it belongs to.
-> 81 of the 114 endpoint components are round-tripped on every push, 52 of them
+> 81 of the 124 endpoint components are round-tripped on every push, 52 of them
 > against a live broker, and six connectors are also held to the conformance
 > suite's redelivery checks. The one you are about to use may well be among the
 > other 33: [add a case for it](#test-coverage) before you rely on it. See
@@ -34,7 +34,7 @@ its job. Redpanda supplies only the I/O components.
 mq-bridge owns one end of every stream, so the plugin is only ever half a route.
 That is also the rule for when it earns its place.
 
-**Reach is the point.** 51 inputs, 63 outputs and 68 processors that mq-bridge
+**Reach is the point.** 56 inputs, 68 outputs and 86 processors that mq-bridge
 has no connector for, plus mq-bridge's own route model — retry, DLQ,
 deduplication, encryption, transform, switch, observability — over sinks that
 never had it.
@@ -360,7 +360,7 @@ input:
 | `connect_mapping`, `connect_mutation`, `connect_bloblang` | Bloblang rewrites; `deleted()` drops a message |
 | `connect_jq`, `connect_jmespath`, `connect_grok`, `connect_parse_log` | Reshaping and parsing |
 | `connect_json_schema` | Validation |
-| `connect_avro`, `connect_msgpack`, `connect_schema_registry_decode`, `connect_schema_registry_encode` | Encoding |
+| `connect_avro`, `connect_msgpack` | Encoding |
 | `connect_http`, `connect_branch`, `connect_cached`, `connect_javascript` | Enrichment and lookups |
 | `connect_dedupe` | Deduplication against a cache, which may be shared (Redis, Memcached) across instances |
 | `connect_log` | Logging each message |
@@ -377,7 +377,6 @@ one call, and to share resources between them, use the `connect` middleware:
 middlewares:
   - connect:
       processors:
-        - schema_registry_decode: { url: http://localhost:8081 }
         - mapping: 'root = this.payload'
         - dedupe: { cache: seen, key: '${! json("id") }' }
       cache_resources:
@@ -460,20 +459,19 @@ gate, which also checks that a rejected or abandoned message comes back.
 | `reject_errored` (output) | ✓ | – | no broker, wrapping `file` |
 | `generate` (input) | feeds every round trip | – | no broker |
 
-That is 81 of the 114 inputs and outputs. Everything else — S3 and the other
+That is 81 of the 124 inputs and outputs. Everything else — S3 and the other
 cloud connectors, Elasticsearch, OpenSearch and the rest — has not
 been run through this boundary.
 
-All 18 [processor middlewares](#processors-as-middlewares) and the `connect`
-chain are run end to end, and through the chain 31 more processors, 49 of the
-68 linked:
+All 16 [processor middlewares](#processors-as-middlewares) and the `connect`
+chain are run end to end, and through the chain 31 more processors, 47 of the
+86 linked:
 
 | Processors | Run as | What is checked |
 | :--- | :--- | :--- |
 | `mapping`, `mutation`, `bloblang`, `jq`, `jmespath`, `grok`, `parse_log` | `connect_<processor>` | the rewritten payload; `deleted()` drops the message, `throw()` rejects the batch |
 | `json_schema` | `connect_json_schema` | a valid message passes, an invalid one rejects the batch |
 | `avro`, `msgpack` | `connect_<processor>` | encode, then decode back |
-| `schema_registry_encode`, `schema_registry_decode` | `connect_<processor>` | encode, then decode back, against a stub registry serving one Avro schema |
 | `http`, `branch`, `cached`, `javascript` | `connect_<processor>` | the enriched payload; `cached` answers a repeated key from its cache |
 | `dedupe`, `log` | `connect_<processor>` | a repeated key is dropped; a logged message passes unchanged |
 | `compress`, `decompress`, `bounds_check`, `select_parts`, `noop`, `sleep`, `metric` | `connect` chain | the payload after the chain; `bounds_check` drops a short message |
@@ -487,7 +485,7 @@ chain are run end to end, and through the chain 31 more processors, 49 of the
 
 `unarchive` and `insert_part` are run only to show that a processor adding
 messages rejects the batch, as `text_chunker` does on a text longer than one
-chunk. The other 17, among them `redis`, `mongodb`, `nats_kv`,
+chunk. The other 37, among them `redis`, `mongodb`, `nats_kv`,
 `nats_request_reply` and `split`, are not run.
 
 To cover another component, paste its `output:` / `input:` template from
@@ -498,9 +496,9 @@ Docker, and compiles nothing ([docs/TESTING.md](docs/TESTING.md#endpoint-round-t
 ## Curated components
 
 Only the Redpanda Connect packages that reach no Redpanda Community License
-code are linked — 51 inputs, 63 outputs and 68 processors, from the allowlist in
+code are linked — 56 inputs, 68 outputs and 86 processors, from the allowlist in
 [`go-bridge/components.allow`](go-bridge/components.allow). The aggregate
-`public/components/all` bundle, and with it `kafka`, `aws`, `snowflake` and
+`public/components/all` bundle, and with it `kafka`, `snowflake` and
 `redpanda`, is excluded. How the allowlist is built and checked, and the
 third-party licenses it brings in, are in [docs/LICENSING.md](docs/LICENSING.md).
 
