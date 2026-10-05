@@ -26,7 +26,7 @@ its job. Redpanda supplies only the I/O components.
 > 81 of the 124 endpoint components are round-tripped on every push, 52 of them
 > against a live broker, and six connectors are also held to the conformance
 > suite's redelivery checks. The one you are about to use may well be among the
-> other 33: [add a case for it](#test-coverage) before you rely on it. See
+> other 43: [add a case for it](#test-coverage) before you rely on it. See
 > [docs/TESTING.md](docs/TESTING.md) for exactly what has been tested and how.
 
 ## When this is worth it

@@ -45,7 +45,7 @@ failure is fixed and CI is green on both.
 **What still gates the next status, and why you should test first.** The
 table covers 27 of the 124 endpoint components and the
 [round trips](#endpoint-round-trips) bring that to 81, all of them in CI,
-so the connector you are about to use may well be one of the other 33. The
+so the connector you are about to use may well be one of the other 43. The
 risk is no longer that this does not build — it is that your connector has
 never been run against a live broker through this boundary. Run the
 conformance suite against yours before you rely on it. Windows is documented
@@ -104,7 +104,7 @@ The cases live in [`tests/endpoints/cases.toml`](../tests/endpoints/cases.toml).
 | :--- | :--- | :--- |
 | Connector, no broker | `file`, `socket` → `socket_server`, `http_client` → `http_server`, `websocket` → `http_server`, `http_server` → `http_client` and `websocket`, `subprocess`, `stdout` → `stdin`, `file` → `csv`, `sql_insert` → `sql_select` and `sql_raw` (SQLite), `nanomsg`, and the wrappers `broker`, `fallback` → `sequence`, `retry` → `batched`, `drop_on` → `read_until`, `dynamic`, `reject_errored` | ten messages out through the output and back through the input |
 | Connector, live broker | `beanstalkd`, `redis_streams`, `redis_pubsub`, `redis_list`, `nats`, `nats_jetstream`, `nats_kv`, `amqp_0_9`, `amqp_1`, `mqtt`, `nsq`, `pulsar`, `mongodb`, `sql_insert` → `sql_select` and `sql_raw` (PostgreSQL), `cache` → `redis_scan`, `redis_hash`, `sftp`, `azure_blob_storage`, `azure_queue_storage`, `azure_table_storage` (Azurite), `nats_stream`, `cassandra`, `gcp_cloud_storage` and `gcp_pubsub` (emulators), `qdrant`, `questdb`, `cockroachdb_changefeed` | the same; metadata too for `redis_streams` and `amqp_0_9` |
-| Middleware | all 18 `connect_*` and the `connect` chain | the rewritten payloads, dropped messages, and that a failing processor or a fan-out rejects the batch |
+| Middleware | all 16 `connect_*` and the `connect` chain | the rewritten payloads, dropped messages, and that a failing processor or a fan-out rejects the batch |
 | Processor | 31 more, through the `connect` chain (`processor_*` cases; the list is in the [README](../README.md#test-coverage)) | the rewritten payload |
 
 A connector case uses the template format of Redpanda Connect's own
