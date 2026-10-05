@@ -231,6 +231,11 @@ def go_note(present):
     return platform_note(present, GO_PLATFORMS, lambda p: f"{p[0]}/{p[1]}")
 
 
+# Ours, not a dependency: the bridge itself, and go-bridge/unwrapped, which
+# only borrows an upstream module path so Go lets it import internal packages.
+FIRST_PARTY = ("github.com/marcomq/", "github.com/redpanda-data/connect/v4/mqbridge/")
+
+
 def go_closure(goos, goarch):
     out = subprocess.run(
         ["go", "list", "-deps", "-f", "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}", "."],
@@ -240,7 +245,7 @@ def go_closure(goos, goarch):
     modules = set()
     for line in out.split("\n"):
         parts = line.split()
-        if len(parts) == 2 and not parts[0].startswith("github.com/marcomq/"):
+        if len(parts) == 2 and not parts[0].startswith(FIRST_PARTY):
             modules.add((parts[0], parts[1]))
     if not any(path == SENTINEL for path, _version in modules):
         raise SystemExit(

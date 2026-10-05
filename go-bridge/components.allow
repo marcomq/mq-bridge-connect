@@ -1,12 +1,11 @@
 # RCL-free component packages of github.com/redpanda-data/connect/v4.
 #
-# Derived from a static import-graph closure over connect v4.110.0: 55 of its 79
-# public/components packages reach no file carrying the Redpanda Community
-# License header, and 54 of those 55 can be linked into a shared library. The
-# taint is transitive and NOT predictable from a package name --
-# `snowflake`, `kafka`, `aws` and `redpanda` are all tainted, while
-# `gcp` is clean because RCL there is confined to `gcp/enterprise`, which
-# components/gcp does not import.
+# Every Redpanda Connect file these reach carries the Apache-2.0 header; no
+# other licence and no missing header is accepted. The taint is transitive and
+# NOT predictable from a package name -- `snowflake`, `kafka` and `redpanda` are
+# tainted, while `gcp` is clean because RCL there is confined to
+# `gcp/enterprise`, which components/gcp does not import. `confluent` is out
+# because it reaches internal/impl/protobuf/common, which is BSL.
 #
 # Two single upstream files carry almost all the blast radius:
 #   internal/serviceaccount/oauth2.go -> blocks a2a all aws cloud community
@@ -21,6 +20,13 @@
 # 8-byte aligned, which only the deprecated -ld_classic accepts; the Linux one
 # carries R_X86_64_TPOFF32 initial-exec TLS relocations, which a shared object
 # cannot hold and which we cannot recompile away.
+#
+# An entry under internal/ is relative to github.com/redpanda-data/connect/v4
+# instead. It names an Apache-2.0 implementation package whose public wrapper
+# cannot be used: the wrapper is an RCL file (openai, ollama, cohere), has no
+# licence header (timeplus), or drags tainted siblings in (aws, pure/extended).
+# The wrapper is never imported: go-bridge/unwrapped, a nested module inside
+# the upstream path, links the implementation with a file of our own.
 #
 # An entry may carry a Go build constraint after whitespace, which excludes it
 # from platforms where it cannot link. Paths are relative to
@@ -38,7 +44,6 @@ beanstalkd
 cassandra
 changelog
 cockroachdb
-confluent
 couchbase
 crypto
 cyborgdb
@@ -79,7 +84,26 @@ spicedb
 sql
 statsd
 text
-timeplus
 twitter
 wasm
 zeromq
+
+internal/impl/awk
+internal/impl/aws/bedrock
+internal/impl/aws/cloudwatch
+internal/impl/aws/kinesis
+internal/impl/aws/lambda
+internal/impl/aws/s3
+internal/impl/aws/sns
+internal/impl/aws/sqs
+internal/impl/cohere
+internal/impl/html
+internal/impl/jsonpath
+internal/impl/lang
+internal/impl/mongodb/aws
+internal/impl/ollama
+internal/impl/openai
+internal/impl/opensearch/aws
+internal/impl/parquet
+internal/impl/timeplus
+internal/impl/xml

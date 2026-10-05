@@ -150,8 +150,6 @@ export_connect_plugins! {
     ParseLog => "parse_log",
     Avro => "avro",
     Msgpack => "msgpack",
-    SchemaRegistryDecode => "schema_registry_decode",
-    SchemaRegistryEncode => "schema_registry_encode",
     Javascript => "javascript",
     Http => "http",
     Branch => "branch",

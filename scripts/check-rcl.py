@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Fails if the Go sibling links any Redpanda Community License source.
+"""Fails if the Go sibling links any upstream source that is not Apache-2.0.
 
 The allowlist in go-bridge/components.allow is a claim; this is the check. It
 asks the Go toolchain which packages the bridge actually compiles -- for this
 GOOS/GOARCH, with build constraints applied -- and reads every file in that
 closure. A package that upstream taints in a later release is caught here
 rather than by a licence audit after release.
+
+Two rules, and both must hold. No linked file anywhere may carry the RCL
+header. And every linked file of Redpanda Connect itself must carry the
+Apache-2.0 header, so a file with a new or missing licence fails too.
 
 Run it for the host platform, and with GOOS set for every platform shipped.
 """
@@ -19,6 +23,10 @@ BRIDGE = os.path.join(ROOT, "go-bridge")
 
 # The header upstream stamps on enterprise files, from licenses/rcl_header.go.txt.
 MARKER = "under the Redpanda Community"
+
+# The header on every other upstream file, from licenses/Apache-2.0_header.go.txt.
+APACHE = "Licensed under the Apache License, Version 2.0"
+UPSTREAM = "github.com/redpanda-data/connect/v4"
 
 # Importing this is what pulls the whole curated catalogue in. If it is missing
 # from the closure, the scan covered something other than the shipped build.
@@ -52,6 +60,7 @@ def main():
     ).stdout.strip()
 
     tainted = []
+    unlicensed = []
     scanned = 0
     packages = linked_packages()
 
@@ -72,6 +81,7 @@ def main():
             continue
         # Only what the compiler sees: no _test.go, no constraint-excluded files.
         names = package.get("GoFiles", []) + package.get("CgoFiles", [])
+        upstream = (package.get("Module") or {}).get("Path") == UPSTREAM
         for name in names:
             path = os.path.join(directory, name)
             try:
@@ -82,6 +92,17 @@ def main():
             scanned += 1
             if MARKER in head:
                 tainted.append((package["ImportPath"], name))
+            elif upstream and APACHE not in head:
+                unlicensed.append((package["ImportPath"], name))
+
+    if unlicensed:
+        print(
+            f"Redpanda Connect source without an Apache-2.0 header is linked into "
+            f"the {goos} build:",
+            file=sys.stderr,
+        )
+        for import_path, name in sorted(unlicensed):
+            print(f"  {import_path}/{name}", file=sys.stderr)
 
     if tainted:
         print(f"RCL-licensed source is linked into the {goos} build:", file=sys.stderr)
@@ -92,9 +113,13 @@ def main():
             "regenerate with `go generate ./...`.",
             file=sys.stderr,
         )
+    if tainted or unlicensed:
         raise SystemExit(1)
 
-    print(f"{goos}: {scanned} linked Go files, no RCL header")
+    print(
+        f"{goos}: {scanned} linked Go files, no RCL header, "
+        "every Redpanda Connect file Apache-2.0"
+    )
 
 
 if __name__ == "__main__":
