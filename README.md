@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/marcomq/mq-bridge-connect/actions/workflows/ci.yml/badge.svg)](https://github.com/marcomq/mq-bridge-connect/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-![Status](https://img.shields.io/badge/status-early%20(broker%20verified%20in%20CI)-orange)
+![Status](https://img.shields.io/badge/status-broker%20verified%20in%20CI-orange)
 
 A Redpanda Connect **connector** compatibility plugin for
 [`mq-bridge`](https://github.com/marcomq/mq-bridge).
@@ -18,16 +18,6 @@ its job. Redpanda supplies only the I/O components.
 > [issue tracker](https://github.com/marcomq/mq-bridge-connect/issues) instead.
 > "Redpanda" and "Benthos" are trademarks of their respective owners and are
 > used here only to describe compatibility.
-
-> ## ⚠️ Status: early — perform your own testing before you deploy
->
-> Messages cross the boundary in both directions, payloads and metadata survive
-> both ways, and an mq-bridge nack rejects the one source message it belongs to.
-> 81 of the 124 endpoint components are round-tripped on every push, 52 of them
-> against a live broker, and six connectors are also held to the conformance
-> suite's redelivery checks. The one you are about to use may well be among the
-> other 43: [add a case for it](#test-coverage) before you rely on it. See
-> [docs/TESTING.md](docs/TESTING.md) for exactly what has been tested and how.
 
 ## When this is worth it
 
@@ -62,104 +52,60 @@ the test suite.
 
 ## Install
 
-Prebuilt for macOS arm64, Linux x86_64/arm64 and Windows x86_64:
+Prebuilt for macOS arm64, Linux x86_64/arm64 (glibc ≥ 2.35) and Windows x64.
+The plugin needs mq-bridge: the `mqb` command, or the library for Python,
+Node.js or Rust.
 
-```console
-brew install marcomq/tap/mq-bridge-connect
-conda install -c marcomq mq-bridge-connect
-```
-
-Either puts both libraries, and the third-party notices, where mq-bridge looks
-for them; a route can then name the `connect` endpoint with no further setup.
-
-For the Python and Node.js bindings of mq-bridge, call `register()` from the
-language package before starting routes:
-
-```console
-pip install mq-bridge mq-bridge-connect  # wheel includes both libraries
-npm install mq-bridge mq-bridge-connect     # downloads them on first use, see node/README.md
-```
-
-From Rust, depend on the crate and use `ConnectFactory` directly
-([`examples/quickstart.rs`](examples/quickstart.rs)):
-
-```console
-cargo add mq-bridge mq-bridge-connect
-```
-
-Cargo compiles only the Rust side. The build script downloads the Go library
-for the build target from this version's GitHub release, verifies it against
-the sha256 pinned in the published crate (a mismatch fails the build), and puts
-it next to the binaries, tests and examples under `target/`. `cargo run` and
-`cargo test` then work with no setup.
-
-- `MQ_BRIDGE_CONNECT_GO_LIBRARY=/abs/path/to/libmq_bridge_connect_go.so` uses
-  your own library instead: at build time it skips the download, at runtime it
-  overrides every other location. It is not checksummed.
-- `MQ_BRIDGE_CONNECT_DOWNLOAD_URL` fetches the archives from a mirror; the
-  checksum still applies.
-- `default-features = false, features = ["plugin"]` turns the download off.
-- Offline, the build succeeds with a warning; set the variable at runtime.
-
-To ship a program, copy `libmq_bridge_connect_go.*` (`mq_bridge_connect_go.dll`)
-from `target/<profile>/` next to the executable, together with
-`THIRD_PARTY_NOTICES` (in the crate and in every release archive).
-The release archives are the same files for a manual install — see
-[packaging/INSTALL.md](packaging/INSTALL.md).
-
-### Docker
-
-The [`mq-bridge-app`](https://github.com/marcomq/mq-bridge/tree/main/apps/mq-bridge-app)
-image (`ghcr.io/marcomq/mq-bridge-app`) has no plugins built in, but it searches
-`/usr/local/lib/mq-bridge` for them, so installing the plugin is copying a
-Linux release archive there. The image is Debian 12 based, which the Linux
-archives (built against glibc 2.35) run on.
-
-Download and unpack the archive for the image's architecture
-(`aarch64-unknown-linux-gnu` on arm64):
+**Command line**, with Homebrew (macOS, Linux). The plugin package does not
+pull in `mqb`, so install both:
 
 ```sh
-curl -fsSLO https://github.com/marcomq/mq-bridge-connect/releases/download/v0.1.0/mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-tar xzf mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+brew install marcomq/tap/mq-bridge-app       # the mqb command
+brew install marcomq/tap/mq-bridge-connect   # this plugin
 ```
 
-**Build a derived image** — the recommended way:
+With conda (also Windows), into one environment:
+`conda install -c marcomq -c conda-forge mq-bridge-app mq-bridge-connect`.
 
-```dockerfile
-FROM ghcr.io/marcomq/mq-bridge-app:latest
-COPY mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu/*.so /usr/local/lib/mq-bridge/
-COPY mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu/THIRD_PARTY_NOTICES \
-     mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu/LICENSE-* \
-     /usr/share/licenses/mq-bridge-connect/
-```
+Without a package manager (macOS arm64, Linux), the plugin from the latest
+release into `~/.local/share/mq-bridge/plugins`:
+`curl -fsSL https://raw.githubusercontent.com/marcomq/mq-bridge-connect/main/install.sh | sh`.
 
-`COPY` leaves the files owned by root, which is what plugin discovery requires:
-a library it finds on its own is loaded only if it and every directory above it
-belong to root or to the user running mq-bridge (`nonroot` here). A route can
-then name `connect` with no further setup:
+**Libraries**, each with both plugin libraries included or downloaded on first use:
 
 ```sh
-docker build -t mq-bridge-app-connect .
-docker run --rm mq-bridge-app-connect copy 'connect+mqtt://broker:1883/orders' 'file:///app/orders.jsonl'
+pip install mq-bridge mq-bridge-connect   # then: mq_bridge_connect.register()
+npm install mq-bridge mq-bridge-connect   # then: register() from "mq-bridge-connect"
+cargo add mq-bridge mq-bridge-connect     # then: register_endpoint_factory("connect", …)
 ```
 
-**Or mount the directory** without building an image. A bind mount keeps the
-host's file owner, which discovery refuses, so name the plugin by path —
-a library loaded by path is not ownership-checked:
+**Try it**, no broker needed. `hello.yaml`:
+
+```yaml
+routes:
+  hello:
+    exit_on_empty: true
+    startup_timeout_ms: 30000    # the first load of the 218 MiB library can exceed 5 s
+    input:
+      custom:
+        name: connect
+        config:
+          connector: generate
+          count: 5
+          interval: ""
+          mapping: 'root = {"id": counter(), "text": "hello"}'
+    output:
+      file: { path: "hello.jsonl", format: raw }
+```
 
 ```sh
-docker run --rm -v "$PWD/mq-bridge-connect-0.1.0-x86_64-unknown-linux-gnu:/plugins/connect:ro" \
-    ghcr.io/marcomq/mq-bridge-app:latest \
-    --plugin /plugins/connect/libmq_bridge_connect.so copy 'connect+mqtt://broker:1883/orders' 'file:///app/orders.jsonl'
+mqb --config hello.yaml --no-ui
 ```
 
-The Go sibling is found beside the plugin, so mount the whole directory, not
-the one file. Either way, keep `THIRD_PARTY_NOTICES` in the image or the mount:
-it is part of the distribution (see [packaging/INSTALL.md](packaging/INSTALL.md)).
-The first `connect` route loads a 218 MiB library, so give it a generous
-startup timeout (see [Known issues](#known-issues)).
+`mqb` exits after writing five lines to `hello.jsonl`.
 
-Building the plugin yourself: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Release archives, Windows paths, Docker, the Rust build details and
+troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Examples
 
@@ -401,6 +347,18 @@ top: ~1.5 µs for `root = this`, ~2.6 µs for a `merge`
 ([Performance](docs/PERFORMANCE.md#through-mqb)). Processing is CPU-bound, so it scales across route
 workers — 2.2× with `mqb`'s default of four — when the sink takes batches in any
 order; `file` keeps order, which holds the chain to one worker.
+
+## Status
+
+Perform your own testing before you deploy.
+
+Messages cross the boundary in both directions, payloads and metadata survive
+both ways, and an mq-bridge nack rejects the one source message it belongs to.
+81 of the 124 endpoint components are round-tripped on every push, 52 of them
+against a live broker, and six connectors are also held to the conformance
+suite's redelivery checks. The one you are about to use may well be among the
+other 43: [add a case for it](#test-coverage) before you rely on it. See
+[docs/TESTING.md](docs/TESTING.md) for exactly what has been tested and how.
 
 ## Test coverage
 

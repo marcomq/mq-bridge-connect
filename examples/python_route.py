@@ -4,7 +4,7 @@ The Python binding never compiled this endpoint in; it loads the shared library
 at runtime and the endpoint is then addressable by the name the plugin exports
 (`connect`), exactly as in Rust or in an `mqb` config.
 
-    pip install mq-bridge-py
+    pip install mq-bridge
     cargo build --lib
     (cd go-bridge && go build -buildmode=c-shared \
         -o ../target/debug/libmq_bridge_connect_go.dylib .)   # .so on Linux

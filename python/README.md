@@ -1,7 +1,7 @@
 # mq-bridge-connect (Python)
 
 An unofficial Redpanda Connect compatibility plugin for
-[mq-bridge-py](https://pypi.org/project/mq-bridge-py/). It lets mq-bridge routes
+[mq-bridge](https://pypi.org/project/mq-bridge/). It lets mq-bridge routes
 use Redpanda Connect (Benthos) connectors as endpoints. The wheel contains no
 Python implementation: it bundles the compiled Rust plugin and its Go sibling
 library and registers them with mq-bridge.
@@ -11,7 +11,7 @@ library and registers them with mq-bridge.
 > <https://github.com/marcomq/mq-bridge-connect/issues>.
 
 ```console
-pip install mq-bridge-py mq-bridge-connect
+pip install mq-bridge mq-bridge-connect
 ```
 
 ```python

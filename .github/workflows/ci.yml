@@ -119,6 +119,50 @@ jobs:
           python3 tests/endpoints/run.py ${{ matrix.os == 'ubuntu-latest' && '--strict' || '' }} \
             --plugin "$PWD/target/debug/libmq_bridge_connect.${{ matrix.os == 'macos-latest' && 'dylib' || 'so' }}"
 
+  # install.sh against the latest published release and the latest mqb, as a
+  # user runs it: this checks the script, not the libraries built here.
+  install-script:
+    name: install.sh (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mqb_asset: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            mqb_asset: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            mqb_asset: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck -s sh install.sh
+      - name: Install the plugin
+        env:
+          MQB_CONNECT_DIR: ${{ runner.temp }}/plugins
+        run: |
+          sh install.sh
+          sh install.sh   # an update in place over an existing install
+          ls -l "$MQB_CONNECT_DIR"
+          test -s "$MQB_CONNECT_DIR/THIRD_PARTY_NOTICES"
+      - name: Install mqb
+        run: |
+          mkdir -p "$RUNNER_TEMP/mqb"
+          curl -fsSL "https://github.com/marcomq/mq-bridge/releases/latest/download/mq-bridge-cli-${{ matrix.mqb_asset }}.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/mqb"
+          dirname "$(find "$RUNNER_TEMP/mqb" -name mqb -type f | head -n 1)" >> "$GITHUB_PATH"
+      - name: A route through the installed plugin
+        env:
+          MQB_PLUGIN_DIR: ${{ runner.temp }}/plugins
+        run: |
+          mqb --version
+          mqb copy --drain 'connect+generate://?count=3&interval=&mapping=root.id%20%3D%20counter()' \
+            "file://$RUNNER_TEMP/out.jsonl"
+          test "$(wc -l < "$RUNNER_TEMP/out.jsonl")" -eq 3
+
   conformance:
     name: Conformance (beanstalkd, NATS, Redis, RabbitMQ, MQTT)
     runs-on: ubuntu-latest
