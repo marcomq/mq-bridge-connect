@@ -87,7 +87,7 @@ latest version from the [releases page](https://github.com/marcomq/mq-bridge-con
 and your platform's target from the table above:
 
 ```sh
-VERSION=0.2.1
+VERSION=0.2.2
 TARGET=aarch64-apple-darwin
 BASE=https://github.com/marcomq/mq-bridge-connect/releases/download/v$VERSION
 curl -fLO "$BASE/mq-bridge-connect-$VERSION-$TARGET.tar.gz"
@@ -283,7 +283,7 @@ Download and unpack the archive for the image's architecture
 (`aarch64-unknown-linux-gnu` on arm64):
 
 ```sh
-VERSION=0.2.1
+VERSION=0.2.2
 TARGET=x86_64-unknown-linux-gnu
 curl -fLO "https://github.com/marcomq/mq-bridge-connect/releases/download/v$VERSION/mq-bridge-connect-$VERSION-$TARGET.tar.gz"
 mkdir -p connect
