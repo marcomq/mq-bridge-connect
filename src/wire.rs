@@ -100,6 +100,22 @@ pub(crate) fn decode_responses(blob: Bytes) -> Result<Vec<(usize, CanonicalMessa
     Ok(indexes.into_iter().zip(responses).collect())
 }
 
+/// Encodes the replies of a commit in the layout [`decode_responses`] reads.
+pub(crate) fn encode_replies(replies: Vec<(usize, CanonicalMessage)>) -> Vec<u8> {
+    if replies.is_empty() {
+        return Vec::new();
+    }
+    let (indexes, messages): (Vec<usize>, Vec<CanonicalMessage>) = replies.into_iter().unzip();
+    let batch = encode(&messages);
+    let mut blob = Vec::with_capacity(4 + 4 * indexes.len() + batch.len());
+    blob.extend_from_slice(&(indexes.len() as u32).to_le_bytes());
+    for index in indexes {
+        blob.extend_from_slice(&(index as u32).to_le_bytes());
+    }
+    blob.extend(batch);
+    blob
+}
+
 fn push_bytes(blob: &mut Vec<u8>, value: &[u8]) {
     blob.extend_from_slice(&(value.len() as u32).to_le_bytes());
     blob.extend_from_slice(value);
@@ -170,6 +186,18 @@ mod tests {
         );
         assert_eq!((decoded[1].0, &decoded[1].1.payload[..]), (0, &b"A"[..]));
         assert!(decode_responses(Bytes::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn replies_round_trip_with_their_indexes() {
+        let blob = encode_replies(vec![
+            (3, message("R", &[("k", "v")])),
+            (0, message("S", &[])),
+        ]);
+        let decoded = decode_responses(Bytes::from(blob)).unwrap();
+        assert_eq!((decoded[0].0, &decoded[0].1.payload[..]), (3, &b"R"[..]));
+        assert_eq!((decoded[1].0, &decoded[1].1.payload[..]), (0, &b"S"[..]));
+        assert!(encode_replies(Vec::new()).is_empty());
     }
 
     #[test]

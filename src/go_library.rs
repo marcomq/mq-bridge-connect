@@ -37,6 +37,8 @@ type StreamCommitFn = unsafe extern "C" fn(u64, u64, *const u8, usize, *mut Owne
 type StreamPublishFn = unsafe extern "C" fn(u64, *const u8, usize, *mut OwnedBytes) -> i32;
 type StreamPublishResponsesFn =
     unsafe extern "C" fn(u64, *const u8, usize, *mut OwnedBytes, *mut OwnedBytes) -> i32;
+type StreamCommitRepliesFn =
+    unsafe extern "C" fn(u64, u64, *const u8, usize, *const u8, usize, *mut OwnedBytes) -> i32;
 type StreamCloseFn = unsafe extern "C" fn(u64, u32, *mut OwnedBytes) -> i32;
 type ProcessorOpenFn = unsafe extern "C" fn(*const u8, usize, *mut u64, *mut OwnedBytes) -> i32;
 type ProcessorApplyFn = unsafe extern "C" fn(
@@ -65,6 +67,7 @@ struct ApiV1 {
     processor_apply: Option<ProcessorApplyFn>,
     processor_close: Option<ProcessorCloseFn>,
     stream_publish_responses: Option<StreamPublishResponsesFn>,
+    stream_commit_replies: Option<StreamCommitRepliesFn>,
 }
 
 /// A loaded Go runtime and its versioned private ABI table.
@@ -136,6 +139,7 @@ impl GoLibrary {
             || value.processor_apply.is_none()
             || value.processor_close.is_none()
             || value.stream_publish_responses.is_none()
+            || value.stream_commit_replies.is_none()
         {
             bail!("private ABI table contains a null required function");
         }
@@ -261,6 +265,32 @@ impl GoLibrary {
             )
         };
         self.result("stream_commit", status, error)
+    }
+
+    /// As [`Self::stream_commit`], also handing each `Reply` disposition's message
+    /// to its source message, in the layout of `wire::encode_replies`.
+    pub fn stream_commit_replies(
+        &self,
+        handle: u64,
+        batch_id: u64,
+        dispositions: &[u8],
+        replies: &[u8],
+    ) -> Result<(), GoError> {
+        let mut error = OwnedBytes::default();
+        let status = unsafe {
+            self.api()
+                .stream_commit_replies
+                .expect("validated stream_commit_replies")(
+                handle,
+                batch_id,
+                dispositions.as_ptr(),
+                dispositions.len(),
+                replies.as_ptr(),
+                replies.len(),
+                &mut error,
+            )
+        };
+        self.result("stream_commit_replies", status, error)
     }
 
     /// Writes a batch into the stream, blocking until it is delivered or fails.

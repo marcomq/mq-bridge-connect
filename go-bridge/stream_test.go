@@ -1093,7 +1093,7 @@ func TestAParkedBatchIsReleasedOnlyOnce(t *testing.T) {
 
 	released := make(chan struct{})
 	go func() {
-		parked.resolve(0, []byte{1, 0})
+		parked.resolve(0, []byte{1, 0}, nil)
 		close(released)
 	}()
 	select {
@@ -1104,7 +1104,7 @@ func TestAParkedBatchIsReleasedOnlyOnce(t *testing.T) {
 
 	// And the reverse order: a fully committed batch must not be released again.
 	other := &parkedBatch{batch: batch, ack: make(chan error, 1), remaining: 1}
-	other.resolve(0, []byte{0})
+	other.resolve(0, []byte{0}, nil)
 	abandoned := make(chan struct{})
 	go func() {
 		other.abandon(errClosing)
@@ -1160,5 +1160,101 @@ func TestClosingDrainsBatchesThatArriveDuringTheShutdown(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > budget {
 		t.Errorf("close took %v, over its %v budget: batches parked during the "+
 			"shutdown were not drained", elapsed, budget)
+	}
+}
+
+func storedPayloads(t *testing.T, store *service.SyncResponseStore) []string {
+	t.Helper()
+	var payloads []string
+	for _, batch := range store.Read() {
+		for _, message := range batch {
+			payload, err := message.AsBytes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			payloads = append(payloads, string(payload))
+		}
+	}
+	return payloads
+}
+
+// One mq-bridge batch spans the tail of one parked batch and all of another, so
+// each reply has to be translated into the index of its own source message.
+func TestRepliesAnswerTheirSourceMessagesBeforeTheAck(t *testing.T) {
+	first, firstStore := service.MessageBatch{
+		service.NewMessage([]byte("a0")), service.NewMessage([]byte("a1")), service.NewMessage([]byte("a2")),
+	}.WithSyncResponseStore()
+	second, secondStore := service.MessageBatch{service.NewMessage([]byte("b0"))}.WithSyncResponseStore()
+	firstParked := &parkedBatch{batch: first, ack: make(chan error, 1), remaining: 2}
+	secondParked := &parkedBatch{batch: second, ack: make(chan error, 1), remaining: 1}
+	handle := &streamHandle{batches: map[uint64][]handedRun{
+		7: {{parked: firstParked, start: 1, count: 2}, {parked: secondParked, start: 0, count: 1}},
+	}}
+
+	err := handle.commitReplies(7, []byte{0, 0, 0}, []indexedResponse{
+		{index: 1, message: service.NewMessage([]byte("reply-a2"))},
+		{index: 2, message: service.NewMessage([]byte("reply-b0"))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, parked := range []*parkedBatch{firstParked, secondParked} {
+		if err := <-parked.ack; err != nil {
+			t.Fatalf("ack failed: %v", err)
+		}
+	}
+	if got := storedPayloads(t, firstStore); len(got) != 1 || got[0] != "reply-a2" {
+		t.Fatalf("first source got %v", got)
+	}
+	if got := storedPayloads(t, secondStore); len(got) != 1 || got[0] != "reply-b0" {
+		t.Fatalf("second source got %v", got)
+	}
+}
+
+func TestAReplyOutsideTheBatchAbandonsIt(t *testing.T) {
+	parked := &parkedBatch{
+		batch: service.MessageBatch{service.NewMessage([]byte("a"))}, ack: make(chan error, 1), remaining: 1,
+	}
+	handle := &streamHandle{batches: map[uint64][]handedRun{3: {{parked: parked, start: 0, count: 1}}}}
+	err := handle.commitReplies(3, []byte{0}, []indexedResponse{{index: 1, message: service.NewMessage(nil)}})
+	if err == nil {
+		t.Fatal("a reply for a message outside the batch was accepted")
+	}
+	if <-parked.ack == nil {
+		t.Fatal("the batch was acked instead of abandoned")
+	}
+}
+
+func TestAReplyToASourceWithoutAResponseStoreIsIgnored(t *testing.T) {
+	parked := &parkedBatch{
+		batch: service.MessageBatch{service.NewMessage([]byte("a"))}, ack: make(chan error, 1), remaining: 1,
+	}
+	parked.resolve(0, []byte{0}, []indexedResponse{{index: 0, message: service.NewMessage([]byte("r"))}})
+	if err := <-parked.ack; err != nil {
+		t.Fatalf("ack failed: %v", err)
+	}
+}
+
+func TestRepliesRoundTripTheirIndexes(t *testing.T) {
+	message := service.NewMessage([]byte("reply"))
+	message.MetaSetMut("k", "v")
+	blob, err := encodeResponses([]indexedResponse{{index: 4, message: message}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies, err := decodeReplies(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := replies[0].message.AsBytes()
+	value, _ := replies[0].message.MetaGetMut("k")
+	if len(replies) != 1 || replies[0].index != 4 || string(payload) != "reply" || value != "v" {
+		t.Fatalf("got %+v", replies)
+	}
+	if empty, err := decodeReplies(nil); err != nil || empty != nil {
+		t.Fatalf("an empty blob decoded to %v, %v", empty, err)
+	}
+	if _, err := decodeReplies(blob[:len(blob)-1]); err == nil {
+		t.Fatal("a truncated blob was accepted")
 	}
 }

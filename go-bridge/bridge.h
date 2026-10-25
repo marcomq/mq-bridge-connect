@@ -38,6 +38,10 @@ typedef int32_t (*mqbrp_stream_publish_responses_fn)(uint64_t handle, uint8_t *b
                                                      size_t batch_len,
                                                      mqbrp_owned_bytes *responses_out,
                                                      mqbrp_owned_bytes *error_out);
+typedef int32_t (*mqbrp_stream_commit_replies_fn)(uint64_t handle, uint64_t batch_id,
+                                                  uint8_t *dispositions, size_t count,
+                                                  uint8_t *replies, size_t replies_len,
+                                                  mqbrp_owned_bytes *error_out);
 typedef int32_t (*mqbrp_stream_close_fn)(uint64_t handle, uint32_t timeout_ms,
                                          mqbrp_owned_bytes *error_out);
 typedef int32_t (*mqbrp_processor_open_fn)(uint8_t *config, size_t config_len,
@@ -64,6 +68,7 @@ typedef struct mqbrp_api_v1 {
     mqbrp_processor_apply_fn processor_apply;
     mqbrp_processor_close_fn processor_close;
     mqbrp_stream_publish_responses_fn stream_publish_responses;
+    mqbrp_stream_commit_replies_fn stream_commit_replies;
 } mqbrp_api_v1;
 
 const mqbrp_api_v1 *mqbrp_get_api_v1(void);
@@ -81,6 +86,9 @@ int32_t mqbrp_go_stream_publish(uint64_t handle, uint8_t *batch, size_t batch_le
 int32_t mqbrp_go_stream_publish_responses(uint64_t handle, uint8_t *batch, size_t batch_len,
                                           mqbrp_owned_bytes *responses_out,
                                           mqbrp_owned_bytes *error_out);
+int32_t mqbrp_go_stream_commit_replies(uint64_t handle, uint64_t batch_id, uint8_t *dispositions,
+                                       size_t count, uint8_t *replies, size_t replies_len,
+                                       mqbrp_owned_bytes *error_out);
 int32_t mqbrp_go_stream_close(uint64_t handle, uint32_t timeout_ms, mqbrp_owned_bytes *error_out);
 int32_t mqbrp_go_processor_open(uint8_t *config, size_t config_len, uint64_t *handle_out,
                                 mqbrp_owned_bytes *error_out);

@@ -63,12 +63,16 @@ impl GoStream {
         self: &Arc<Self>,
         batch_id: u64,
         dispositions: Vec<u8>,
+        replies: Vec<u8>,
     ) -> anyhow::Result<()> {
         let handle = self.handle()?;
         let this = Arc::clone(self);
-        spawn_blocking(move || this.go.stream_commit(handle, batch_id, &dispositions))
-            .await
-            .context("the connect stream task failed")??;
+        spawn_blocking(move || {
+            this.go
+                .stream_commit_replies(handle, batch_id, &dispositions, &replies)
+        })
+        .await
+        .context("the connect stream task failed")??;
         Ok(())
     }
 

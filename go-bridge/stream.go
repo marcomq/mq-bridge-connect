@@ -83,11 +83,17 @@ type handedRun struct {
 
 // Applies mq-bridge's dispositions to one run, and releases the source batch
 // once every message in it has been accounted for.
-func (p *parkedBatch) resolve(start int, dispositions []byte) {
+// Replies carry indexes into the parked batch and are stored before the ack,
+// because an input such as `http_server` reads its response once it is acked.
+func (p *parkedBatch) resolve(start int, dispositions []byte, replies []indexedResponse) {
 	p.mutex.Lock()
 	if p.released {
 		p.mutex.Unlock()
 		return
+	}
+	for _, reply := range replies {
+		// Fails only for an input that cannot answer its caller, which ignores replies.
+		_ = reply.message.WithContext(p.batch[reply.index].Context()).AddSyncResponse()
 	}
 	for index, disposition := range dispositions {
 		if disposition == C.MQBRP_NACK {
@@ -496,6 +502,11 @@ func (h *streamHandle) nextBatch(max int, timeout time.Duration) (uint64, []byte
 }
 
 func (h *streamHandle) commit(id uint64, dispositions []byte) error {
+	return h.commitReplies(id, dispositions, nil)
+}
+
+// As commit, with replies indexed by their position in the mq-bridge batch.
+func (h *streamHandle) commitReplies(id uint64, dispositions []byte, replies []indexedResponse) error {
 	h.mutex.Lock()
 	runs, present := h.batches[id]
 	delete(h.batches, id)
@@ -514,9 +525,24 @@ func (h *streamHandle) commit(id uint64, dispositions []byte) error {
 		abandonAll(runs, err)
 		return err
 	}
+	for _, reply := range replies {
+		if reply.index < 0 || reply.index >= total {
+			err := fmt.Errorf("batch %d has %d messages but a reply for message %d",
+				id, total, reply.index)
+			abandonAll(runs, err)
+			return err
+		}
+	}
 	offset := 0
 	for _, run := range runs {
-		run.parked.resolve(run.start, dispositions[offset:offset+run.count])
+		var runReplies []indexedResponse
+		for _, reply := range replies {
+			if reply.index >= offset && reply.index < offset+run.count {
+				reply.index += run.start - offset
+				runReplies = append(runReplies, reply)
+			}
+		}
+		run.parked.resolve(run.start, dispositions[offset:offset+run.count], runReplies)
 		offset += run.count
 	}
 	return nil
@@ -734,6 +760,27 @@ func mqbrp_go_stream_commit(id C.uint64_t, batchID C.uint64_t, dispositions *C.u
 		return failure(errorOut, C.MQBRP_INVALID, err)
 	}
 	if err := handle.commit(uint64(batchID), goBytes(dispositions, count)); err != nil {
+		return failure(errorOut, C.MQBRP_INTERNAL, err)
+	}
+	return C.MQBRP_OK
+}
+
+//export mqbrp_go_stream_commit_replies
+func mqbrp_go_stream_commit_replies(id C.uint64_t, batchID C.uint64_t, dispositions *C.uint8_t,
+	count C.size_t, replies *C.uint8_t, repliesLen C.size_t,
+	errorOut *C.mqbrp_owned_bytes) (status C.int32_t) {
+	clearOwnedBytes(errorOut)
+	defer recoverAsStatus(&status, errorOut)
+
+	handle, err := lookupStream(uint64(id))
+	if err != nil {
+		return failure(errorOut, C.MQBRP_INVALID, err)
+	}
+	decoded, err := decodeReplies(goBytes(replies, repliesLen))
+	if err != nil {
+		return failure(errorOut, C.MQBRP_INVALID, err)
+	}
+	if err := handle.commitReplies(uint64(batchID), goBytes(dispositions, count), decoded); err != nil {
 		return failure(errorOut, C.MQBRP_INTERNAL, err)
 	}
 	return C.MQBRP_OK
