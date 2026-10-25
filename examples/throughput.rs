@@ -32,7 +32,7 @@ struct Options {
 async fn main() -> anyhow::Result<()> {
     let options = parse_arguments()?;
     let payload = "x".repeat(PAYLOAD_BYTES);
-    let factory = ConnectFactory::default();
+    let factory = ConnectFactory;
 
     let elapsed = match options.scenario.as_str() {
         "generate-consume" => consume(&factory, generated(&options, &payload), &options).await?,

@@ -104,6 +104,26 @@ func encodeRuns(runs []handedRun, total int, hint int) ([]byte, error) {
 	return buffer, nil
 }
 
+// Encodes sync responses as `u32 count`, one `u32` request index per response,
+// then the responses as an ordinary batch.
+func encodeResponses(responses []indexedResponse) ([]byte, error) {
+	if len(responses) == 0 {
+		return nil, nil
+	}
+	buffer := appendU32(nil, len(responses))
+	for _, response := range responses {
+		buffer = appendU32(buffer, response.index)
+	}
+	buffer = appendU32(buffer, len(responses))
+	for _, response := range responses {
+		var err error
+		if buffer, err = appendMessage(buffer, response.message); err != nil {
+			return nil, err
+		}
+	}
+	return buffer, nil
+}
+
 func appendMessage(buffer []byte, message *service.Message) ([]byte, error) {
 	payload, err := message.AsBytes()
 	if err != nil {

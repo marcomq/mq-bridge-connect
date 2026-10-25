@@ -738,7 +738,8 @@ func TestTheDefaultBudgetBlocksASourceBatchThatDoesNotFit(t *testing.T) {
 }
 
 // A source batch larger than the whole budget takes all of it instead of
-// waiting forever for room it can never have.
+// waiting forever for room it can never have. The two batches park in either
+// order, so each is committed as soon as it arrives.
 func TestASourceBatchLargerThanTheBudgetStillParks(t *testing.T) {
 	large := defaultInFlightMessages + 10
 	source := registerScripted(t, "mqbrp_test_oversized", [][]string{
@@ -746,19 +747,35 @@ func TestASourceBatchLargerThanTheBudgetStillParks(t *testing.T) {
 	})
 	handle := openScripted(t, "mqbrp_test_oversized")
 
-	for _, want := range []int{large, 2} {
-		sizes := holdMessages(t, handle, want)
-		if len(sizes) != 1 {
-			t.Fatalf("expected the %d messages in one mq-bridge batch, got %d", want, len(sizes))
+	largest := 0
+	deadline := time.Now().Add(10 * time.Second)
+	for received := 0; received < large+2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d messages arrived", received, large+2)
 		}
-		commitAll(t, handle, sizes)
+		batchID, blob, err := handle.nextBatch(large+2, 100*time.Millisecond)
+		if err != nil {
+			t.Fatalf("nextBatch failed: %v", err)
+		}
+		if len(blob) == 0 {
+			continue
+		}
+		count := int(binary.LittleEndian.Uint32(blob))
+		received += count
+		largest = max(largest, count)
+		commitAll(t, handle, map[uint64]int{batchID: count})
+	}
+	if largest < large {
+		t.Errorf("the %d-message source batch was split; the largest handover held %d", large, largest)
+	}
+	for count := 0; count < 2; count++ {
 		select {
 		case acked := <-source.acked:
 			if acked.err != nil {
 				t.Errorf("source batch %d was rejected: %v", acked.batch, acked.err)
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatalf("the batch of %d messages was never acknowledged", want)
+			t.Fatalf("only %d of 2 source batches were acknowledged", count)
 		}
 	}
 }
@@ -852,6 +869,151 @@ func (stuckSink) Close(context.Context) error   { return nil }
 func (stuckSink) WriteBatch(ctx context.Context, _ service.MessageBatch) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func openPublisher(t *testing.T, config string) *streamHandle {
+	t.Helper()
+	id, err := openStream(kindPublisher, config)
+	if err != nil {
+		t.Fatalf("failed to open the stream: %v", err)
+	}
+	handle, err := lookupStream(id)
+	if err != nil {
+		t.Fatalf("the stream was not registered: %v", err)
+	}
+	t.Cleanup(func() { _ = handle.close(5 * time.Second) })
+	return handle
+}
+
+func encodePayloads(t *testing.T, payloads ...string) []byte {
+	t.Helper()
+	batch := make(service.MessageBatch, len(payloads))
+	for index, payload := range payloads {
+		batch[index] = service.NewMessage([]byte(payload))
+	}
+	blob, err := encodeRuns([]handedRun{{
+		parked: &parkedBatch{batch: batch}, start: 0, count: len(batch),
+	}}, len(batch), 0)
+	if err != nil {
+		t.Fatalf("failed to encode the batch: %v", err)
+	}
+	return blob
+}
+
+// Decodes what encodeResponses wrote into request index -> response.
+func decodeResponses(t *testing.T, blob []byte) map[int]*service.Message {
+	t.Helper()
+	responses := map[int]*service.Message{}
+	if len(blob) == 0 {
+		return responses
+	}
+	count := int(binary.LittleEndian.Uint32(blob))
+	indexes := make([]int, count)
+	for position := range indexes {
+		indexes[position] = int(binary.LittleEndian.Uint32(blob[4+4*position:]))
+	}
+	batch, err := decodeBatch(blob[4+4*count:])
+	if err != nil {
+		t.Fatalf("the responses did not decode: %v", err)
+	}
+	if len(batch) != count {
+		t.Fatalf("%d indexes for %d responses", count, len(batch))
+	}
+	for position, message := range batch {
+		responses[indexes[position]] = message
+	}
+	return responses
+}
+
+// Each response comes back with the index of its request, without the internal
+// index key, and a request the pipeline dropped gets none.
+func TestSyncResponsesAreMatchedToTheirRequests(t *testing.T) {
+	handle := openPublisher(t, "output:\n  sync_response: {}\n  processors:\n"+
+		"    - mapping: 'root = if content().string() == \"drop\" { deleted() } else { content().uppercase() }'\n")
+
+	blob, err := handle.publishWithResponses(encodePayloads(t, "a", "drop", "c"))
+	if err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+	responses := decodeResponses(t, blob)
+	want := map[int]string{0: "A", 2: "C"}
+	if len(responses) != len(want) {
+		t.Fatalf("got responses for %d requests, want %d", len(responses), len(want))
+	}
+	for index, payload := range want {
+		response, ok := responses[index]
+		if !ok {
+			t.Fatalf("no response for request %d", index)
+		}
+		if got, _ := response.AsBytes(); string(got) != payload {
+			t.Errorf("request %d: response %q, want %q", index, got, payload)
+		}
+		if _, leaked := response.MetaGet(replyIndexKey); leaked {
+			t.Errorf("request %d: the response still carries %s", index, replyIndexKey)
+		}
+	}
+}
+
+// A response built from scratch has no index; it can only answer a lone request.
+func TestAResponseWithoutAnIndexAnswersOnlyALoneRequest(t *testing.T) {
+	handle := openPublisher(t, "output:\n  sync_response: {}\n  processors:\n"+
+		"    - mapping: 'meta = deleted()'\n")
+
+	blob, err := handle.publishWithResponses(encodePayloads(t, "only"))
+	if err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+	if responses := decodeResponses(t, blob); len(responses) != 1 || responses[0] == nil {
+		t.Fatalf("the lone request got %d responses, want its own", len(responses))
+	}
+
+	blob, err = handle.publishWithResponses(encodePayloads(t, "a", "b"))
+	if err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+	if responses := decodeResponses(t, blob); len(responses) != 0 {
+		t.Fatalf("responses without an index were placed on %d of 2 requests", len(responses))
+	}
+}
+
+func TestOnlyASyncResponseKeyTurnsOnResponseCollection(t *testing.T) {
+	for config, want := range map[string]bool{
+		"sync_response: {}":                                   true,
+		"broker:\n  outputs:\n    - sync_response: {}":        true,
+		"- sync_response: {}":                                 true,
+		"drop: {}\n# sync_response":                           false,
+		"drop: {}\nprocessors:\n  - mapping: 'sync_response'": false,
+	} {
+		if got := namesSyncResponse(config); got != want {
+			t.Errorf("namesSyncResponse(%q) = %v, want %v", config, got, want)
+		}
+	}
+}
+
+// Without `sync_response` in the config, nothing is tagged and nothing returned.
+func TestAPublisherWithoutSyncResponseReturnsNoResponses(t *testing.T) {
+	sink := &recordingSink{arrived: make(chan struct{}, 1)}
+	err := service.RegisterBatchOutput("mqbrp_test_no_responses", service.NewConfigSpec(),
+		func(*service.ParsedConfig, *service.Resources) (service.BatchOutput, service.BatchPolicy, int, error) {
+			return sink, service.BatchPolicy{}, 1, nil
+		})
+	if err != nil {
+		t.Fatalf("failed to register the recording sink: %v", err)
+	}
+	handle := openPublisher(t, "output:\n  mqbrp_test_no_responses: {}\n")
+
+	blob, err := handle.publishWithResponses(encodePayloads(t, "a"))
+	if err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+	if len(blob) != 0 {
+		t.Errorf("got %d bytes of responses from an output without sync_response", len(blob))
+	}
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	if _, tagged := sink.received[0].MetaGet(replyIndexKey); tagged {
+		t.Errorf("the request was tagged with %s although nothing collects responses", replyIndexKey)
+	}
 }
 
 func TestAPublishTheOutputNeverConfirmsFailsAfterPublishTimeout(t *testing.T) {

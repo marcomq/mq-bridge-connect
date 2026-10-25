@@ -72,13 +72,14 @@ impl GoStream {
         Ok(())
     }
 
-    pub(crate) async fn publish(self: &Arc<Self>, batch: Vec<u8>) -> anyhow::Result<()> {
+    /// Returns the sync responses the output stored, as `wire::decode_responses` reads them.
+    pub(crate) async fn publish(self: &Arc<Self>, batch: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         let handle = self.handle()?;
         let this = Arc::clone(self);
-        spawn_blocking(move || this.go.stream_publish(handle, &batch))
+        let responses = spawn_blocking(move || this.go.stream_publish_responses(handle, &batch))
             .await
             .context("the connect stream task failed")??;
-        Ok(())
+        Ok(responses)
     }
 
     /// Stops the stream. Messages handed to mq-bridge but never committed are

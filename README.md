@@ -515,8 +515,13 @@ and the comparison against native pipelines and mq-bridge's own endpoints:
   batches are written concurrently and have no order between them. Set
   `max_in_flight: 1` for a source whose order matters — at the cost of the
   pipelining that overlaps mq-bridge's work with the source's.
-* **`Reply` is not supported.** A Benthos source has nowhere to put a reply, so
-  `MessageDisposition::Reply` acknowledges and the reply payload is dropped.
+* **Replies go one way.** An output whose config names `sync_response`
+  answers each request with what reaches it, e.g. after an `http` processor.
+  Every request then carries an `mqb_reply_index` metadata key, which other
+  outputs of the same stream see too; a processor clearing all metadata breaks
+  the matching for batches of more than one. A
+  connect source has nowhere to put a reply, so `MessageDisposition::Reply`
+  acknowledges and the reply payload is dropped.
 * **A send is bounded by `publish_timeout`.** A send the output never confirms
   fails as retryable after it, and may still be delivered later.
 * **Whole-batch output results.** Redpanda `BatchError` can report partial
