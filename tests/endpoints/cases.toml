@@ -1475,7 +1475,7 @@ processors = [
   { mapping = 'root = "gone"' },
   { cache = { resource = "c", operator = "get", key = "k" } },
 ]
-cache_resources = [{ label = "c", ristretto = {} }]
+cache_resources = [{ label = "c", ristretto = { get_retries = { enabled = true } } }]
 
 [middlewares.processor_cache_multilevel]
 input = ["a"]
