@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mq_bridge::errors::{ConsumerError, InvalidConfig};
 use mq_bridge::traits::{BatchCommitFunc, BoxFuture, MessageConsumer, MessageDisposition};
-use mq_bridge::ReceivedBatch;
+use mq_bridge::{CanonicalMessage, ReceivedBatch};
 
 use crate::go_library::StreamKind;
 use crate::stream::GoStream;
@@ -72,8 +72,10 @@ impl MessageConsumer for ConnectConsumer {
         let stream = Arc::clone(&self.stream);
         let commit: BatchCommitFunc = Box::new(move |dispositions| {
             Box::pin(async move {
-                let encoded = dispositions.iter().map(disposition_byte).collect();
-                stream.commit(batch_id, encoded).await
+                let (encoded, replies) = split_dispositions(dispositions);
+                stream
+                    .commit(batch_id, encoded, wire::encode_replies(replies))
+                    .await
             })
         });
         Ok(ReceivedBatch { messages, commit })
@@ -84,9 +86,7 @@ impl MessageConsumer for ConnectConsumer {
     }
 }
 
-/// Mirrors `MQBRP_ACK` / `MQBRP_NACK`. A Benthos source has nowhere to put a
-/// reply, so `Reply` acknowledges and the reply payload is dropped; the endpoint
-/// documents this rather than failing a route over it.
+/// Mirrors `MQBRP_ACK` / `MQBRP_NACK`; a `Reply` acknowledges.
 fn disposition_byte(disposition: &MessageDisposition) -> u8 {
     match disposition {
         MessageDisposition::Nack => 1,
@@ -94,10 +94,25 @@ fn disposition_byte(disposition: &MessageDisposition) -> u8 {
     }
 }
 
+/// Splits off each reply with the index of the source message it answers. Go
+/// hands it to inputs that answer their caller, such as `http_server`.
+fn split_dispositions(
+    dispositions: Vec<MessageDisposition>,
+) -> (Vec<u8>, Vec<(usize, CanonicalMessage)>) {
+    let mut bytes = Vec::with_capacity(dispositions.len());
+    let mut replies = Vec::new();
+    for (index, disposition) in dispositions.into_iter().enumerate() {
+        bytes.push(disposition_byte(&disposition));
+        if let MessageDisposition::Reply(reply) = disposition {
+            replies.push((index, reply));
+        }
+    }
+    (bytes, replies)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mq_bridge::CanonicalMessage;
 
     #[test]
     fn only_a_nack_rejects_the_source_message() {
@@ -106,6 +121,21 @@ mod tests {
         assert_eq!(
             disposition_byte(&MessageDisposition::Reply(CanonicalMessage::from("reply"))),
             0
+        );
+    }
+
+    #[test]
+    fn replies_keep_the_index_of_their_source_message() {
+        let (bytes, replies) = split_dispositions(vec![
+            MessageDisposition::Ack,
+            MessageDisposition::Reply(CanonicalMessage::from("reply")),
+            MessageDisposition::Nack,
+        ]);
+        assert_eq!(bytes, vec![0, 0, 1]);
+        assert_eq!(replies.len(), 1);
+        assert_eq!(
+            (replies[0].0, &replies[0].1.payload[..]),
+            (1, &b"reply"[..])
         );
     }
 }

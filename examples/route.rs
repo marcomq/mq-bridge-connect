@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     // did not compile it in loads the same code from the shared library with
     // `mq_bridge::plugin::load_endpoint_plugin`; both end up as the endpoint
     // named `connect`, so the route config below is identical either way.
-    register_endpoint_factory("connect", Arc::new(ConnectFactory::default()))?;
+    register_endpoint_factory("connect", Arc::new(ConnectFactory))?;
 
     let route: Route = serde_json::from_value(route_config())?;
     let route = route.with_handler(|mut message: CanonicalMessage| async move {

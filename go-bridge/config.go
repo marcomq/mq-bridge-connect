@@ -247,3 +247,31 @@ func sortedKeys(keys map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// Reports whether any of the YAML documents names `sync_response` as a key, which
+// is how a config uses the output or the processor. Text in a value never counts.
+func namesSyncResponse(documents ...string) bool {
+	for _, document := range documents {
+		var root yaml.Node
+		if yaml.Unmarshal([]byte(document), &root) == nil && hasKey(&root, "sync_response") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKey(node *yaml.Node, key string) bool {
+	if node.Kind == yaml.MappingNode {
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			if node.Content[index].Value == key {
+				return true
+			}
+		}
+	}
+	for _, child := range node.Content {
+		if hasKey(child, key) {
+			return true
+		}
+	}
+	return false
+}

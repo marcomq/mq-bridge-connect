@@ -104,6 +104,58 @@ func encodeRuns(runs []handedRun, total int, hint int) ([]byte, error) {
 	return buffer, nil
 }
 
+// Encodes sync responses as `u32 count`, one `u32` request index per response,
+// then the responses as an ordinary batch.
+func encodeResponses(responses []indexedResponse) ([]byte, error) {
+	if len(responses) == 0 {
+		return nil, nil
+	}
+	buffer := appendU32(nil, len(responses))
+	for _, response := range responses {
+		buffer = appendU32(buffer, response.index)
+	}
+	buffer = appendU32(buffer, len(responses))
+	for _, response := range responses {
+		var err error
+		if buffer, err = appendMessage(buffer, response.message); err != nil {
+			return nil, err
+		}
+	}
+	return buffer, nil
+}
+
+// Decodes the replies of a commit, laid out as [encodeResponses] writes them.
+func decodeReplies(blob []byte) ([]indexedResponse, error) {
+	if len(blob) == 0 {
+		return nil, nil
+	}
+	reader := &wireReader{data: blob}
+	count, err := reader.u32()
+	if err != nil {
+		return nil, err
+	}
+	indexes := make([]int, count)
+	for i := range indexes {
+		index, err := reader.u32()
+		if err != nil {
+			return nil, err
+		}
+		indexes[i] = int(index)
+	}
+	batch, err := decodeBatch(blob[reader.offset:])
+	if err != nil {
+		return nil, err
+	}
+	if len(batch) != len(indexes) {
+		return nil, fmt.Errorf("%d reply indexes for %d replies", len(indexes), len(batch))
+	}
+	replies := make([]indexedResponse, len(batch))
+	for i, message := range batch {
+		replies[i] = indexedResponse{index: indexes[i], message: message}
+	}
+	return replies, nil
+}
+
 func appendMessage(buffer []byte, message *service.Message) ([]byte, error) {
 	payload, err := message.AsBytes()
 	if err != nil {

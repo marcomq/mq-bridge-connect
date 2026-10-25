@@ -21,7 +21,7 @@ const MESSAGES: usize = 3;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let factory = ConnectFactory::default();
+    let factory = ConnectFactory;
 
     // Form A: name a connector, and every other field goes to it. mq-bridge
     // owns the other end of the stream, so there is no `output` to write.

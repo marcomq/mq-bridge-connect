@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,11 +83,17 @@ type handedRun struct {
 
 // Applies mq-bridge's dispositions to one run, and releases the source batch
 // once every message in it has been accounted for.
-func (p *parkedBatch) resolve(start int, dispositions []byte) {
+// Replies carry indexes into the parked batch and are stored before the ack,
+// because an input such as `http_server` reads its response once it is acked.
+func (p *parkedBatch) resolve(start int, dispositions []byte, replies []indexedResponse) {
 	p.mutex.Lock()
 	if p.released {
 		p.mutex.Unlock()
 		return
+	}
+	for _, reply := range replies {
+		// Fails only for an input that cannot answer its caller, which ignores replies.
+		_ = reply.message.WithContext(p.batch[reply.index].Context()).AddSyncResponse()
 	}
 	for index, disposition := range dispositions {
 		if disposition == C.MQBRP_NACK {
@@ -153,6 +160,9 @@ type streamHandle struct {
 	pending        chan *parkedBatch               // consumer streams only
 	produce        service.MessageBatchHandlerFunc // publisher streams only
 	publishTimeout time.Duration                   // publisher streams only; zero waits forever
+	// Publisher streams only: the config names `sync_response`, so each publish
+	// collects the responses the output stores.
+	collectResponses bool
 
 	// Source batches parked but not yet released. Once this reaches
 	// `maxInFlight` the source is blocked until mq-bridge commits.
@@ -312,6 +322,8 @@ func openStream(kind uint32, source string) (uint64, error) {
 			return 0, err
 		}
 		handle.produce = produce
+		handle.collectResponses = namesSyncResponse(
+			append([]string{config.output, config.resources}, config.processors...)...)
 	}
 
 	for index, processor := range config.processors {
@@ -490,6 +502,11 @@ func (h *streamHandle) nextBatch(max int, timeout time.Duration) (uint64, []byte
 }
 
 func (h *streamHandle) commit(id uint64, dispositions []byte) error {
+	return h.commitReplies(id, dispositions, nil)
+}
+
+// As commit, with replies indexed by their position in the mq-bridge batch.
+func (h *streamHandle) commitReplies(id uint64, dispositions []byte, replies []indexedResponse) error {
 	h.mutex.Lock()
 	runs, present := h.batches[id]
 	delete(h.batches, id)
@@ -508,24 +525,62 @@ func (h *streamHandle) commit(id uint64, dispositions []byte) error {
 		abandonAll(runs, err)
 		return err
 	}
+	for _, reply := range replies {
+		if reply.index < 0 || reply.index >= total {
+			err := fmt.Errorf("batch %d has %d messages but a reply for message %d",
+				id, total, reply.index)
+			abandonAll(runs, err)
+			return err
+		}
+	}
 	offset := 0
 	for _, run := range runs {
-		run.parked.resolve(run.start, dispositions[offset:offset+run.count])
+		var runReplies []indexedResponse
+		for _, reply := range replies {
+			if reply.index >= offset && reply.index < offset+run.count {
+				reply.index += run.start - offset
+				runReplies = append(runReplies, reply)
+			}
+		}
+		run.parked.resolve(run.start, dispositions[offset:offset+run.count], runReplies)
 		offset += run.count
 	}
 	return nil
 }
 
 func (h *streamHandle) publish(blob []byte) error {
+	_, err := h.publishWithResponses(blob)
+	return err
+}
+
+// Tags each request with its position, so a sync response can be matched to the
+// request it answers. Benthos keeps metadata on a stored response but not context.
+const replyIndexKey = "mqb_reply_index"
+
+type indexedResponse struct {
+	index   int
+	message *service.Message
+}
+
+// Publishes a batch and returns the sync responses its output stored, encoded
+// by encodeResponses; nil when there are none.
+func (h *streamHandle) publishWithResponses(blob []byte) ([]byte, error) {
 	if h.produce == nil {
-		return errors.New("stream is a consumer and cannot be published to")
+		return nil, errors.New("stream is a consumer and cannot be published to")
 	}
 	batch, err := decodeBatch(blob)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(batch) == 0 {
-		return nil
+		return nil, nil
+	}
+	var store *service.SyncResponseStore
+	if h.collectResponses {
+		for index, message := range batch {
+			message.MetaSetMut(replyIndexKey, strconv.Itoa(index))
+		}
+		batch, store = batch.WithSyncResponseStore()
 	}
 	ctx := h.context
 	if h.publishTimeout > 0 {
@@ -535,10 +590,44 @@ func (h *streamHandle) publish(blob []byte) error {
 	}
 	err = h.produce(ctx, batch)
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("delivery not confirmed within `publish_timeout` (%s); "+
+		return nil, fmt.Errorf("delivery not confirmed within `publish_timeout` (%s); "+
 			"the output may still be retrying, and its warnings name the cause", h.publishTimeout)
 	}
-	return err
+	if err != nil || store == nil {
+		return nil, err
+	}
+	matched, dropped := matchResponses(store.Read(), len(batch))
+	if dropped > 0 {
+		slog.Warn("sync responses that cannot be matched to a request were dropped",
+			"dropped", dropped, "requests", len(batch), "key", replyIndexKey)
+	}
+	return encodeResponses(matched)
+}
+
+// Keeps the first response to each request, and counts the rest as dropped. In
+// a one-message batch every response answers the only request, index or not.
+func matchResponses(stored []service.MessageBatch, requests int) (matched []indexedResponse, dropped int) {
+	answered := make([]bool, requests)
+	for _, batch := range stored {
+		for _, message := range batch {
+			index := -1
+			if requests == 1 {
+				index = 0
+			} else if value, ok := message.MetaGet(replyIndexKey); ok {
+				if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 && parsed < requests {
+					index = parsed
+				}
+			}
+			if index < 0 || answered[index] {
+				dropped++
+				continue
+			}
+			answered[index] = true
+			message.MetaDelete(replyIndexKey)
+			matched = append(matched, indexedResponse{index: index, message: message})
+		}
+	}
+	return matched, dropped
 }
 
 func (h *streamHandle) dropCarry(err error) {
@@ -676,6 +765,27 @@ func mqbrp_go_stream_commit(id C.uint64_t, batchID C.uint64_t, dispositions *C.u
 	return C.MQBRP_OK
 }
 
+//export mqbrp_go_stream_commit_replies
+func mqbrp_go_stream_commit_replies(id C.uint64_t, batchID C.uint64_t, dispositions *C.uint8_t,
+	count C.size_t, replies *C.uint8_t, repliesLen C.size_t,
+	errorOut *C.mqbrp_owned_bytes) (status C.int32_t) {
+	clearOwnedBytes(errorOut)
+	defer recoverAsStatus(&status, errorOut)
+
+	handle, err := lookupStream(uint64(id))
+	if err != nil {
+		return failure(errorOut, C.MQBRP_INVALID, err)
+	}
+	decoded, err := decodeReplies(goBytes(replies, repliesLen))
+	if err != nil {
+		return failure(errorOut, C.MQBRP_INVALID, err)
+	}
+	if err := handle.commitReplies(uint64(batchID), goBytes(dispositions, count), decoded); err != nil {
+		return failure(errorOut, C.MQBRP_INTERNAL, err)
+	}
+	return C.MQBRP_OK
+}
+
 //export mqbrp_go_stream_publish
 func mqbrp_go_stream_publish(id C.uint64_t, batch *C.uint8_t, batchLen C.size_t,
 	errorOut *C.mqbrp_owned_bytes) (status C.int32_t) {
@@ -689,6 +799,25 @@ func mqbrp_go_stream_publish(id C.uint64_t, batch *C.uint8_t, batchLen C.size_t,
 	if err := handle.publish(goBytes(batch, batchLen)); err != nil {
 		return failure(errorOut, C.MQBRP_INTERNAL, err)
 	}
+	return C.MQBRP_OK
+}
+
+//export mqbrp_go_stream_publish_responses
+func mqbrp_go_stream_publish_responses(id C.uint64_t, batch *C.uint8_t, batchLen C.size_t,
+	responsesOut *C.mqbrp_owned_bytes, errorOut *C.mqbrp_owned_bytes) (status C.int32_t) {
+	clearOwnedBytes(errorOut)
+	clearOwnedBytes(responsesOut)
+	defer recoverAsStatus(&status, errorOut)
+
+	handle, err := lookupStream(uint64(id))
+	if err != nil {
+		return failure(errorOut, C.MQBRP_INVALID, err)
+	}
+	responses, err := handle.publishWithResponses(goBytes(batch, batchLen))
+	if err != nil {
+		return failure(errorOut, C.MQBRP_INTERNAL, err)
+	}
+	setOwnedBytes(responsesOut, responses)
 	return C.MQBRP_OK
 }
 

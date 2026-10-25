@@ -35,6 +35,10 @@ type StreamNextBatchFn =
     unsafe extern "C" fn(u64, u32, u32, *mut u64, *mut OwnedBytes, *mut OwnedBytes) -> i32;
 type StreamCommitFn = unsafe extern "C" fn(u64, u64, *const u8, usize, *mut OwnedBytes) -> i32;
 type StreamPublishFn = unsafe extern "C" fn(u64, *const u8, usize, *mut OwnedBytes) -> i32;
+type StreamPublishResponsesFn =
+    unsafe extern "C" fn(u64, *const u8, usize, *mut OwnedBytes, *mut OwnedBytes) -> i32;
+type StreamCommitRepliesFn =
+    unsafe extern "C" fn(u64, u64, *const u8, usize, *const u8, usize, *mut OwnedBytes) -> i32;
 type StreamCloseFn = unsafe extern "C" fn(u64, u32, *mut OwnedBytes) -> i32;
 type ProcessorOpenFn = unsafe extern "C" fn(*const u8, usize, *mut u64, *mut OwnedBytes) -> i32;
 type ProcessorApplyFn = unsafe extern "C" fn(
@@ -62,6 +66,8 @@ struct ApiV1 {
     processor_open: Option<ProcessorOpenFn>,
     processor_apply: Option<ProcessorApplyFn>,
     processor_close: Option<ProcessorCloseFn>,
+    stream_publish_responses: Option<StreamPublishResponsesFn>,
+    stream_commit_replies: Option<StreamCommitRepliesFn>,
 }
 
 /// A loaded Go runtime and its versioned private ABI table.
@@ -132,6 +138,8 @@ impl GoLibrary {
             || value.processor_open.is_none()
             || value.processor_apply.is_none()
             || value.processor_close.is_none()
+            || value.stream_publish_responses.is_none()
+            || value.stream_commit_replies.is_none()
         {
             bail!("private ABI table contains a null required function");
         }
@@ -259,6 +267,32 @@ impl GoLibrary {
         self.result("stream_commit", status, error)
     }
 
+    /// As [`Self::stream_commit`], also handing each `Reply` disposition's message
+    /// to its source message, in the layout of `wire::encode_replies`.
+    pub fn stream_commit_replies(
+        &self,
+        handle: u64,
+        batch_id: u64,
+        dispositions: &[u8],
+        replies: &[u8],
+    ) -> Result<(), GoError> {
+        let mut error = OwnedBytes::default();
+        let status = unsafe {
+            self.api()
+                .stream_commit_replies
+                .expect("validated stream_commit_replies")(
+                handle,
+                batch_id,
+                dispositions.as_ptr(),
+                dispositions.len(),
+                replies.as_ptr(),
+                replies.len(),
+                &mut error,
+            )
+        };
+        self.result("stream_commit_replies", status, error)
+    }
+
     /// Writes a batch into the stream, blocking until it is delivered or fails.
     pub fn stream_publish(&self, handle: u64, batch: &[u8]) -> Result<(), GoError> {
         let mut error = OwnedBytes::default();
@@ -271,6 +305,27 @@ impl GoLibrary {
             )
         };
         self.result("stream_publish", status, error)
+    }
+
+    /// As [`Self::stream_publish`], returning the sync responses the output stored
+    /// in the layout of `wire::decode_responses`; empty when there are none.
+    pub fn stream_publish_responses(&self, handle: u64, batch: &[u8]) -> Result<Vec<u8>, GoError> {
+        let mut responses = OwnedBytes::default();
+        let mut error = OwnedBytes::default();
+        let status = unsafe {
+            self.api()
+                .stream_publish_responses
+                .expect("validated stream_publish_responses")(
+                handle,
+                batch.as_ptr(),
+                batch.len(),
+                &mut responses,
+                &mut error,
+            )
+        };
+        let responses = self.take(responses);
+        self.result("stream_publish_responses", status, error)
+            .map(|()| responses)
     }
 
     /// Stops the stream and releases the handle. Anything still parked is nacked.

@@ -39,5 +39,5 @@ pub fn factory() -> ConnectFactory {
     );
     // `set_var` is not thread-safe, and the tests in one binary run in parallel.
     LIBRARY.get_or_init(|| std::env::set_var("MQ_BRIDGE_CONNECT_GO_LIBRARY", &library));
-    ConnectFactory::default()
+    ConnectFactory
 }

@@ -79,6 +79,43 @@ pub(crate) fn decode(blob: Bytes) -> Result<Vec<CanonicalMessage>> {
     Ok(messages)
 }
 
+/// Reads the sync responses of a publish, each with the index of the request it
+/// answers: `u32 count`, `count` indexes as `u32`, then the responses as a batch.
+pub(crate) fn decode_responses(blob: Bytes) -> Result<Vec<(usize, CanonicalMessage)>> {
+    if blob.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut reader = Reader {
+        blob: &blob,
+        offset: 0,
+    };
+    let count = reader.u32()? as usize;
+    let indexes = (0..count)
+        .map(|_| reader.u32().map(|index| index as usize))
+        .collect::<Result<Vec<_>>>()?;
+    let responses = decode(blob.slice(reader.offset..))?;
+    if responses.len() != count {
+        bail!("{count} response indexes for {} responses", responses.len());
+    }
+    Ok(indexes.into_iter().zip(responses).collect())
+}
+
+/// Encodes the replies of a commit in the layout [`decode_responses`] reads.
+pub(crate) fn encode_replies(replies: Vec<(usize, CanonicalMessage)>) -> Vec<u8> {
+    if replies.is_empty() {
+        return Vec::new();
+    }
+    let (indexes, messages): (Vec<usize>, Vec<CanonicalMessage>) = replies.into_iter().unzip();
+    let batch = encode(&messages);
+    let mut blob = Vec::with_capacity(4 + 4 * indexes.len() + batch.len());
+    blob.extend_from_slice(&(indexes.len() as u32).to_le_bytes());
+    for index in indexes {
+        blob.extend_from_slice(&(index as u32).to_le_bytes());
+    }
+    blob.extend(batch);
+    blob
+}
+
 fn push_bytes(blob: &mut Vec<u8>, value: &[u8]) {
     blob.extend_from_slice(&(value.len() as u32).to_le_bytes());
     blob.extend_from_slice(value);
@@ -131,6 +168,44 @@ mod tests {
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
         message
+    }
+
+    #[test]
+    fn responses_decode_with_the_index_of_their_request() {
+        let mut blob = Vec::new();
+        for value in [2u32, 2, 0] {
+            blob.extend_from_slice(&value.to_le_bytes());
+        }
+        blob.extend(encode(&[message("C", &[("k", "v")]), message("A", &[])]));
+        let decoded = decode_responses(Bytes::from(blob)).unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!((decoded[0].0, &decoded[0].1.payload[..]), (2, &b"C"[..]));
+        assert_eq!(
+            decoded[0].1.metadata.get("k").map(String::as_str),
+            Some("v")
+        );
+        assert_eq!((decoded[1].0, &decoded[1].1.payload[..]), (0, &b"A"[..]));
+        assert!(decode_responses(Bytes::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn replies_round_trip_with_their_indexes() {
+        let blob = encode_replies(vec![
+            (3, message("R", &[("k", "v")])),
+            (0, message("S", &[])),
+        ]);
+        let decoded = decode_responses(Bytes::from(blob)).unwrap();
+        assert_eq!((decoded[0].0, &decoded[0].1.payload[..]), (3, &b"R"[..]));
+        assert_eq!((decoded[1].0, &decoded[1].1.payload[..]), (0, &b"S"[..]));
+        assert!(encode_replies(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn responses_with_fewer_indexes_than_messages_are_rejected() {
+        let mut blob = 1u32.to_le_bytes().to_vec();
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend(encode(&[message("A", &[]), message("B", &[])]));
+        assert!(decode_responses(Bytes::from(blob)).is_err());
     }
 
     /// The capacity is computed, not guessed, so it must land exactly: too small
