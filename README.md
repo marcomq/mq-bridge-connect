@@ -30,10 +30,11 @@ deduplication, encryption, transform, switch, observability — over sinks that
 never had it.
 
 **The boundary is not what limits a route.** Through `mqb`, a file of short JSON
-lines drains into a Redpanda sink at **3.25M rows/s** and a Redpanda source feeds a file at **1.94M rows/s**
+lines drains into a Redpanda sink at **3.32M rows/s** and a Redpanda source feeds a file at **1.56M rows/s**
 ([Performance](docs/PERFORMANCE.md)); what limits a route is the connector at the
-other end. A Redpanda processor as a middleware is a different matter: it is
-priced by the processor, 270k–540k rows/s for a Bloblang mapping on one worker.
+other end. A Redpanda pipeline run through `mqb` stays within 10 % of Redpanda
+Connect itself. A Redpanda processor as a middleware is a different matter: it is
+priced by the processor, 260k–510k rows/s for a Bloblang mapping on one worker.
 
 **Do not use it for a Redpanda source into a Redpanda sink.** You would pay the
 consumer boundary
@@ -227,18 +228,19 @@ with `threads` and `processors`, `logger`, the three `*_resources` sections,
 `max_in_flight` and, for an output, `publish_timeout`. Any other top-level key is an error naming what is accepted —
 an ignored key would be configuration the user believes is in effect.
 
-`max_in_flight` (default 64) is how many source **batches** may sit
-unacknowledged inside the plugin at once. It is the backpressure, and it is also
-what lets the source keep working while mq-bridge handles the previous batch. See
-[Ordering](#semantics) before lowering it.
+By default up to 4 096 source **messages** may sit unacknowledged inside the
+plugin at once, in however many batches the source made them. It is the
+backpressure, and it is also what lets the source keep working while mq-bridge
+handles the previous batch. Counting messages suits both kinds of source: one
+that emits a message at a time — `file` does, without a `batching` policy —
+still fills mq-bridge's batches, and one that batches parks at most 4 096
+messages, or one batch if that alone is larger. Benthos runs one writer
+goroutine per in-flight batch, so each connect input carries 4 096 idle
+goroutines; a host with many inputs can lower `max_in_flight` to save them.
 
-It counts batches, not messages, so the right value depends on what the source
-produces. A connector that batches is already well served by 64; one that emits
-a message at a time — `file` does, without a `batching` policy — is held to 64
-messages in flight and loses about a fifth of its throughput to the round trip.
-Raise it for those, and see
-[Throughput](#throughput-against-a-native-pipeline) for what it recovers.
-A `file` source that has to keep its line order needs `max_in_flight: 1` instead.
+Setting `max_in_flight` replaces that budget with a limit of that many
+**batches**, whatever their size. See [Ordering](#semantics) before lowering it;
+a `file` source that has to keep its line order needs `max_in_flight: 1`.
 
 `publish_timeout` (default `30s`, output only) bounds how long a send waits for
 the component to confirm delivery. Benthos retries a failing output internally
@@ -266,6 +268,9 @@ silences it.
 * **`nats_jetstream`, `amqp_0_9`.** Benthos does not create streams or queues.
   An AMQP 0.9 publish to a queue that does not exist is dropped by the broker
   without an error.
+* **Parquet.** `parquet_encode` and `parquet_decode` merge and split
+  messages, so they run in a connect endpoint's `processors`, not as
+  middlewares.
 
 ### Schema and validation
 
@@ -342,10 +347,10 @@ without a `connect` endpoint needs a host that loads its plugins up front, as
 `mqb`'s `plugins:` list does.
 
 **Reach for them for what mq-bridge lacks, not for speed.** Crossing into Go
-and back costs about 0.9 µs per message, and the processor's own work comes on
+and back costs about 1 µs per message, and the processor's own work comes on
 top: ~1.5 µs for `root = this`, ~2.6 µs for a `merge`
 ([Performance](docs/PERFORMANCE.md#through-mqb)). Processing is CPU-bound, so it scales across route
-workers — 2.2× with `mqb`'s default of four — when the sink takes batches in any
+workers — 2.3× with `mqb`'s default of four — when the sink takes batches in any
 order; `file` keeps order, which holds the chain to one worker.
 
 ## Status
@@ -401,6 +406,7 @@ gate, which also checks that a rejected or abandoned message comes back.
 | `sql_raw` | ✓ | – | PostgreSQL 16, SQLite |
 | `file` | ✓ | – | no broker |
 | `file` → `csv` | ✓ | – | no broker |
+| `file` with `parquet_encode` → `parquet_decode` | ✓ | – | no broker |
 | `http_client` → `http_server` | ✓ | – | no broker |
 | `http_server` (output) → `http_client` (input) | ✓ | – | no broker |
 | `http_server` (output) → `websocket` (input) | ✓ | – | no broker |
@@ -422,8 +428,8 @@ cloud connectors, Elasticsearch, OpenSearch and the rest — has not
 been run through this boundary.
 
 All 16 [processor middlewares](#processors-as-middlewares) and the `connect`
-chain are run end to end, and through the chain 31 more processors, 47 of the
-86 linked:
+chain are run end to end, through the chain 31 more processors, and
+`parquet_encode` / `parquet_decode` in a round trip, 49 of the 86 linked:
 
 | Processors | Run as | What is checked |
 | :--- | :--- | :--- |
@@ -443,7 +449,7 @@ chain are run end to end, and through the chain 31 more processors, 47 of the
 
 `unarchive` and `insert_part` are run only to show that a processor adding
 messages rejects the batch, as `text_chunker` does on a text longer than one
-chunk. The other 37, among them `redis`, `mongodb`, `nats_kv`,
+chunk. The other 35, among them `redis`, `mongodb`, `nats_kv`,
 `nats_request_reply` and `split`, are not run.
 
 To cover another component, paste its `output:` / `input:` template from
@@ -463,9 +469,10 @@ third-party licenses it brings in, are in [docs/LICENSING.md](docs/LICENSING.md)
 ## Performance
 
 The plugin adds 3 MiB of Rust and a 218 MiB Go library, ~90 ms to a warm start
-and ~170 MiB of resident memory. Through `mqb`, a Redpanda sink takes 3.25M
-rows/s and a Redpanda source feeds 1.94M rows/s; a processor middleware costs
-~0.9 µs a message to cross plus the processor's own work. Numbers, methodology
+and ~170 MiB of resident memory. Through `mqb`, a Redpanda sink takes 3.32M
+rows/s and a Redpanda source feeds 1.56M rows/s, and a Redpanda pipeline stays
+within 10 % of Redpanda Connect; a processor middleware costs ~1 µs a message to
+cross plus the processor's own work. Numbers, methodology
 and the comparison against native pipelines and mq-bridge's own endpoints:
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
@@ -504,8 +511,8 @@ and the comparison against native pipelines and mq-bridge's own endpoints:
 * **An uncommitted batch is nacked, not dropped.** Closing a stream rejects
   everything handed to mq-bridge that was never committed, so the source
   redelivers it.
-* **Ordering is not preserved across in-flight batches.** Up to `max_in_flight`
-  source batches are written concurrently and have no order between them. Set
+* **Ordering is not preserved across in-flight batches.** All in-flight source
+  batches are written concurrently and have no order between them. Set
   `max_in_flight: 1` for a source whose order matters — at the cost of the
   pipelining that overlaps mq-bridge's work with the source's.
 * **`Reply` is not supported.** A Benthos source has nowhere to put a reply, so

@@ -285,6 +285,30 @@ input:
         root = {"id": this.index(0).number(), "run": this.index(1)}
 '''
 
+# parquet_encode merges a batch and parquet_decode splits a file, so both run
+# in the endpoint's processors rather than as middlewares.
+[cases.parquet]
+order = "output_first"
+template = '''
+output:
+  file:
+    path: $DIR/${! uuid_v4() }.parquet
+    codec: all-bytes
+  processors:
+    - parquet_encode:
+        schema:
+          - { name: id, type: INT64 }
+          - { name: run, type: UTF8 }
+
+input:
+  file:
+    paths: [ $DIR/*.parquet ]
+    scanner:
+      to_the_end: {}
+  processors:
+    - parquet_decode: {}
+'''
+
 [cases.sql_raw]
 order = "output_first"
 template = '''

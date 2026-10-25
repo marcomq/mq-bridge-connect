@@ -1,7 +1,7 @@
 # Testing status
 
-**Messages cross the boundary in both directions**, at 1.94M msg/s in and
-3.25M out through `mqb`. A `connect` input consumes through a Redpanda Connect connector and
+**Messages cross the boundary in both directions**, at 1.56M msg/s in and
+3.32M out through `mqb`. A `connect` input consumes through a Redpanda Connect connector and
 a `connect` output publishes through one; payloads and metadata survive both
 ways, Bloblang processors run in between, and an mq-bridge nack rejects the one
 source message it belongs to.

@@ -46,7 +46,7 @@ func BenchmarkNativeDrop(b *testing.B) {
 // The same source into the sink, collected and committed from Go: everything the
 // ABI does except crossing into C and back.
 func BenchmarkBridgedCollect(b *testing.B) {
-	source := fmt.Sprintf("max_in_flight: %d\ninput:\n  %s", defaultMaxInFlight,
+	source := fmt.Sprintf("input:\n  %s",
 		strings.ReplaceAll(benchGenerator(b.N, benchBatch), "\n", "\n  "))
 	id, err := openStream(kindConsumer, source)
 	if err != nil {
@@ -126,7 +126,7 @@ func BenchmarkEncodeRunsWithMetadata(b *testing.B) {
 // channel and its own turn of the collect loop, so this is where per-iteration
 // cost in that loop shows up.
 func BenchmarkBridgedCollectUnbatched(b *testing.B) {
-	source := fmt.Sprintf("max_in_flight: %d\ninput:\n  %s", defaultMaxInFlight,
+	source := fmt.Sprintf("input:\n  %s",
 		strings.ReplaceAll(benchGenerator(b.N, 1), "\n", "\n  "))
 	id, err := openStream(kindConsumer, source)
 	if err != nil {

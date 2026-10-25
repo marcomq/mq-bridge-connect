@@ -22,7 +22,7 @@ type streamConfig struct {
 	resources      string
 	logger         string
 	threads        int
-	maxInFlight    int
+	maxInFlight    int // zero: a message budget of defaultInFlightMessages
 	publishTimeout time.Duration
 }
 
@@ -76,7 +76,7 @@ func parseStreamConfig(kind uint32, source string) (*streamConfig, error) {
 		return nil, fmt.Errorf("configuration must declare `%s`", required)
 	}
 
-	config := &streamConfig{maxInFlight: defaultMaxInFlight, publishTimeout: defaultPublishTimeout}
+	config := &streamConfig{publishTimeout: defaultPublishTimeout}
 	if node, present := document["max_in_flight"]; present {
 		if err := node.Decode(&config.maxInFlight); err != nil {
 			return nil, fmt.Errorf("failed to read `max_in_flight`: %w", err)

@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/redpanda-data/benthos/v4/public/service"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -31,11 +32,11 @@ const (
 // which costs roughly 5x in scheduler contention alone.
 const sinkComponent = "mq_bridge"
 
-// How many source batches Benthos may have parked at once. It is the
-// backpressure, and it is also the pipelining: while mq-bridge works on one
-// batch, the source can keep filling the others. Batches in flight together have
-// no order between them, so an ordered source needs `max_in_flight: 1`.
-const defaultMaxInFlight = 64
+// Without `max_in_flight` the source may park this many messages, in however many
+// batches. Counting messages keeps one-message batches (`file`) from starving
+// mq-bridge and large batches from flooding memory. An explicit `max_in_flight`
+// counts batches instead; an ordered source needs `max_in_flight: 1`.
+const defaultInFlightMessages = 4096
 
 // An upper bound on the parked-batch channel, so an extreme `max_in_flight`
 // cannot allocate an extreme channel.
@@ -158,6 +159,11 @@ type streamHandle struct {
 	maxInFlight int
 	inFlight    atomic.Int64
 
+	// The message budget, when `max_in_flight` was left to its default.
+	messages         *semaphore.Weighted
+	inFlightMessages atomic.Int64
+	budgetWaiters    atomic.Int64 // source batches the remaining budget cannot fit
+
 	// What the last encoded blob measured, used only to size the next one.
 	encodeHint atomic.Int64
 
@@ -185,7 +191,7 @@ var (
 var registerSink = sync.OnceValue(func() error {
 	spec := service.NewConfigSpec().
 		Field(service.NewIntField("stream")).
-		Field(service.NewIntField("max_in_flight").Default(defaultMaxInFlight))
+		Field(service.NewIntField("max_in_flight").Default(defaultInFlightMessages))
 	return service.RegisterBatchOutput(sinkComponent, spec,
 		func(conf *service.ParsedConfig, _ *service.Resources) (service.BatchOutput, service.BatchPolicy, int, error) {
 			id, err := conf.FieldInt("stream")
@@ -280,10 +286,14 @@ func openStream(kind uint32, source string) (uint64, error) {
 		publishTimeout: config.publishTimeout,
 	}
 	if kind == kindConsumer {
+		if handle.maxInFlight == 0 {
+			handle.maxInFlight = defaultInFlightMessages
+			handle.messages = semaphore.NewWeighted(defaultInFlightMessages)
+		}
 		// Benthos never has more than `max_in_flight` batches written at once, so
 		// up to the cap a source batch never waits to be parked. Past the cap it
 		// may, which costs nothing but the wait: `park` blocks either way.
-		handle.pending = make(chan *parkedBatch, min(config.maxInFlight, pendingCapacity))
+		handle.pending = make(chan *parkedBatch, min(handle.maxInFlight, pendingCapacity))
 	}
 	id := registerStream(handle)
 	defer func() {
@@ -312,7 +322,7 @@ func openStream(kind uint32, source string) (uint64, error) {
 
 	if kind == kindConsumer {
 		sink := fmt.Sprintf("%s:\n  stream: %d\n  max_in_flight: %d\n",
-			sinkComponent, id, config.maxInFlight)
+			sinkComponent, id, handle.maxInFlight)
 		if err := builder.AddOutputYAML(sink); err != nil {
 			return 0, err
 		}
@@ -340,6 +350,23 @@ func openStream(kind uint32, source string) (uint64, error) {
 func (h *streamHandle) park(ctx context.Context, batch service.MessageBatch) error {
 	if len(batch) == 0 {
 		return nil
+	}
+	if h.messages != nil {
+		// A batch larger than the whole budget takes all of it rather than none.
+		weight := min(int64(len(batch)), defaultInFlightMessages)
+		if !h.messages.TryAcquire(weight) {
+			h.budgetWaiters.Add(1)
+			err := h.messages.Acquire(ctx, weight)
+			h.budgetWaiters.Add(-1)
+			if err != nil {
+				return err
+			}
+		}
+		h.inFlightMessages.Add(weight)
+		defer func() {
+			h.inFlightMessages.Add(-weight)
+			h.messages.Release(weight)
+		}()
 	}
 	parked := &parkedBatch{batch: batch, ack: make(chan error, 1), remaining: len(batch)}
 	h.inFlight.Add(1)
@@ -397,7 +424,7 @@ func (h *streamHandle) collect(max int, timeout time.Duration) (runs []handedRun
 		// in-flight slot is parked here, nothing more can arrive until mq-bridge
 		// commits, so waiting out the linger would be dead time. A source that
 		// emits one message per batch would otherwise pay it on every batch.
-		if total > 0 && len(h.pending) == 0 && h.inFlight.Load() >= int64(h.maxInFlight) {
+		if total > 0 && len(h.pending) == 0 && h.sourceBlocked() {
 			return runs, total, false
 		}
 		select {
@@ -422,6 +449,12 @@ func (h *streamHandle) collect(max int, timeout time.Duration) (runs []handedRun
 		}
 	}
 	return runs, total, false
+}
+
+func (h *streamHandle) sourceBlocked() bool {
+	return h.inFlight.Load() >= int64(h.maxInFlight) ||
+		(h.messages != nil && (h.budgetWaiters.Load() > 0 ||
+			h.inFlightMessages.Load() >= defaultInFlightMessages))
 }
 
 func (h *streamHandle) nextBatch(max int, timeout time.Duration) (uint64, []byte, error) {

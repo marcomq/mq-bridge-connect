@@ -35,37 +35,37 @@ is why the private ABI is defined per batch.
 
 ## Through `mqb`
 
-1 000 000 short JSON lines, `{"id":N,"perf_test":true}` (29 MiB), run with the
-installed `mqb` 0.4.15 and the plugin loaded: `mqb copy --drain` at its defaults
+1 000 000 short JSON lines, `{"id":N,"perf_test":true}` (29 MiB), run with
+`mq-bridge-app` 1.2.0 and the plugin loaded: `mqb copy --drain` at its defaults
 (`--batch-size 1024 --concurrency 4`), `format=raw` on both files. The rate is the one `mqb`
 reports, as mq-bridge's own figures are, so it leaves out process start; best
 of five.
 
 | Route | rows/s |
 | :--- | ---: |
-| `file` → `file` — native, reference | 4 878 049 |
-| `file` → `connect+drop` — Redpanda sink | 3 246 753 |
-| `connect+generate` → `file` — Redpanda source | 1 941 748 |
-| `\|connect` with `noop` — the middleware boundary alone | 934 579 |
-| `\|connect_mapping` `meta checked = "yes"` | 543 478 |
-| `\|connect_dedupe` on the payload, memory cache | 515 464 |
-| `\|connect_mapping` dropping odd `this.id` | 398 406 |
-| `\|connect_mapping` `root = this` | 383 142 |
-| `\|connect_mapping` `root = this.merge({"seen": true})` | 274 725 |
-| `\|connect_mapping` merge into `connect+drop` instead | 584 795 |
-| `\|connect_mapping` merge into `connect+drop`, `--concurrency 1` | 271 003 |
+| `file` → `file` — native, reference | 6 380 135 |
+| `file` → `connect+drop` — Redpanda sink | 3 319 739 |
+| `connect+generate` → `file` — Redpanda source | 1 562 297 |
+| `\|connect` with `noop` — the middleware boundary alone | 890 533 |
+| `\|connect_mapping` `meta checked = "yes"` | 506 334 |
+| `\|connect_dedupe` on the payload, memory cache | 486 711 |
+| `\|connect_mapping` dropping odd `this.id` | 434 253 |
+| `\|connect_mapping` `root = this` | 370 224 |
+| `\|connect_mapping` `root = this.merge({"seen": true})` | 264 045 |
+| `\|connect_mapping` merge into `connect+drop` instead | 617 303 |
+| `\|connect_mapping` merge into `connect+drop`, `--concurrency 1` | 233 833 |
 
-Middleware rows run `file` → `file` unless they say otherwise, and each wrote
-all 1 000 000 rows but the filter, which kept its 500 000. A `file` sink keeps
-order, so those rows run on one worker whatever `--concurrency` says; into
-`connect+drop` the same merge uses all four. Wall clock including process start
-is lower: 3.01M rows/s native, 2.31M into the Redpanda sink, 837k through
-`noop`.
+Middleware rows run `file` → `file` unless they say otherwise, with the
+middleware on the sink, and each wrote all 1 000 000 rows but the filter, which
+kept its 500 000. A `file` sink keeps order, so those rows run on one worker
+whatever `--concurrency` says; into `connect+drop` the same merge uses all four.
+The source generates with `batch_size: 1024` and a constant mapping; one that
+builds each object with `counter()` holds it at ~950k rows/s.
 
-**Endpoints cost little.** A Redpanda sink adds ~0.1 µs a row over native, and
-a Redpanda source feeds a file at 1.94M rows/s.
+**Endpoints cost little.** A Redpanda sink adds ~0.15 µs a row over native, and
+a Redpanda source feeds a file at 1.56M rows/s.
 
-**A middleware costs ~0.9 µs a message to cross, and its processor costs the
+**A middleware costs ~1 µs a message to cross, and its processor costs the
 rest.** The route already crosses once per batch, so there is no boundary cost
 left for batching to amortize; handing the processor the whole batch instead of
 one message at a time saves a few percent. What helps CPU-bound work is more cores,
@@ -82,6 +82,26 @@ message, like the filter above, gives no sign that it parsed and stays on
 Benthos' parser. Whatever go-json would write differently from
 `encoding/json` — floats with an exponent, invalid UTF-8, anything but plain
 JSON types — is left to Benthos.
+
+## Against Redpanda Connect
+
+The same pipeline twice: once in the official Redpanda Connect 4.110.0 binary,
+once through `mqb copy` with the plugin's Redpanda source and sink at the two
+ends and mq-bridge 1.2.0 in between. The 1 000 000 lines above, read by `file`
+with `scanner: lines`, otherwise each component's defaults. Wall clock including
+process start, best of five:
+
+| Pipeline | Redpanda Connect | `mqb`, `max_in_flight: 4096` | cost | `mqb`, `max_in_flight: 64` | cost |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `file` → `drop` | 4.90 s | 5.39 s | 1.10× | 7.93 s | 1.62× |
+| `file` → `file`, `codec: lines` | 7.95 s | 8.48 s | 1.07× | 14.96 s | 1.88× |
+
+**With enough messages in flight the plugin runs within 10 % of Redpanda
+Connect.** At `max_in_flight: 64`, the default until now, `file` has only 64
+messages in flight, and each one round-trips through mq-bridge before the source
+may refill; see the `file` → mq-bridge row below. The default is now a budget of
+4 096 messages, which for `file` is the 4096 column; it has not been measured
+with that change yet.
 
 ## Throughput against a native pipeline
 
@@ -118,9 +138,9 @@ message per batch, and `max_in_flight` counts batches, so 64 there means 64
 messages in flight rather than 32 000 — and every one of those round-trips
 through mq-bridge before the source may refill. Raising it to 512 turned that row
 into **0.95×** (252 727 bridged against 239 047 native, before ABI 1.2) and leaves the others
-where they are. Any source that does not batch wants a far higher
-`max_in_flight` than one that does; the cost is memory, since a parked message
-is a resident message.
+where they are. Any source that does not batch wants far more batches in flight
+than one that does, which is why the default now counts messages instead; the
+cost is memory, since a parked message is a resident message.
 
 Timings need a quiet machine, but allocation is deterministic and says the same
 thing. Per message, measured in Go alone with `go test -bench`

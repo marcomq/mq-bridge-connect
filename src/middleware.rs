@@ -120,7 +120,9 @@ impl MiddlewareFactory for ChainMiddleware {
 }
 
 async fn open(config: String) -> Result<Box<dyn BatchFilter>> {
-    let go = crate::go_library().map_err(|error| anyhow!(error))?;
+    let go = crate::go_library_blocking()
+        .await
+        .map_err(|error| anyhow!(error))?;
     let handle = {
         let go = Arc::clone(&go);
         spawn_blocking(move || go.processor_open(&config))

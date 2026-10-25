@@ -27,17 +27,16 @@ use async_trait::async_trait;
 use mq_bridge::errors::{ConsumerError, PublisherError};
 use mq_bridge::traits::{CustomEndpointFactory, MessageConsumer, MessagePublisher};
 
-/// A Go sibling that fails to load is reported by every endpoint the factory
-/// creates, not by a panic: `Default` has no other way to fail.
-#[derive(Debug)]
-pub struct ConnectFactory {
-    go: Result<Arc<GoLibrary>, String>,
-}
+/// Loads the Go sibling when the first endpoint is created, so a host that only
+/// registers the plugin never starts Go. A failed load is reported by every endpoint.
+#[derive(Debug, Default)]
+pub struct ConnectFactory;
 
-impl Default for ConnectFactory {
-    fn default() -> Self {
-        Self { go: go_library() }
-    }
+/// [`go_library`] off the async runtime: the first call opens the library and starts Go.
+async fn go_library_blocking() -> Result<Arc<GoLibrary>, String> {
+    tokio::task::spawn_blocking(go_library)
+        .await
+        .map_err(|error| format!("loading the Go sibling library failed: {error}"))?
 }
 
 /// One Go runtime per process, shared by the endpoint and every middleware: Go
@@ -74,9 +73,8 @@ impl CustomEndpointFactory for ConnectFactory {
         route_name: &str,
         config: &serde_json::Value,
     ) -> anyhow::Result<Box<dyn MessageConsumer>> {
-        let go = self
-            .go
-            .clone()
+        let go = go_library_blocking()
+            .await
             .map_err(|error| anyhow::Error::new(ConsumerError::Permanent(anyhow!(error))));
         let created = match go {
             Ok(go) => consumer::create(go, config).await,
@@ -90,9 +88,8 @@ impl CustomEndpointFactory for ConnectFactory {
         route_name: &str,
         config: &serde_json::Value,
     ) -> anyhow::Result<Box<dyn MessagePublisher>> {
-        let go = self
-            .go
-            .clone()
+        let go = go_library_blocking()
+            .await
             .map_err(|error| anyhow::Error::new(PublisherError::NonRetryable(anyhow!(error))));
         let created = match go {
             Ok(go) => publisher::create(go, config).await,

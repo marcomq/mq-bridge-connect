@@ -376,7 +376,6 @@ require (
 	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
 	golang.org/x/term v0.45.0 // indirect
@@ -409,6 +408,9 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 )
 
-require github.com/redpanda-data/connect/v4/mqbridge/unwrapped v0.0.0
+require (
+	github.com/redpanda-data/connect/v4/mqbridge/unwrapped v0.0.0
+	golang.org/x/sync v0.22.0
+)
 
 replace github.com/redpanda-data/connect/v4/mqbridge/unwrapped => ./unwrapped

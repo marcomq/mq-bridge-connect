@@ -653,6 +653,116 @@ func TestSmallSourceBatchesAggregateAndKeepTheirOwnAcks(t *testing.T) {
 	}
 }
 
+func scriptedBatch(prefix string, size int) []string {
+	ids := make([]string, size)
+	for index := range ids {
+		ids[index] = fmt.Sprintf("%s%d", prefix, index)
+	}
+	return ids
+}
+
+// Takes batches without committing them until `want` messages are held, and
+// returns how many messages each batch carries.
+func holdMessages(t *testing.T, handle *streamHandle, want int) map[uint64]int {
+	t.Helper()
+	sizes := map[uint64]int{}
+	deadline := time.Now().Add(10 * time.Second)
+	for held := 0; held < want; {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d messages arrived", held, want)
+		}
+		batchID, blob, err := handle.nextBatch(want-held, 100*time.Millisecond)
+		if err != nil {
+			t.Fatalf("nextBatch failed: %v", err)
+		}
+		if len(blob) > 0 {
+			count := int(binary.LittleEndian.Uint32(blob))
+			held += count
+			sizes[batchID] = count
+		}
+	}
+	return sizes
+}
+
+func commitAll(t *testing.T, handle *streamHandle, sizes map[uint64]int) {
+	t.Helper()
+	for batchID, count := range sizes {
+		if err := handle.commit(batchID, make([]byte, count)); err != nil {
+			t.Fatalf("commit failed: %v", err)
+		}
+	}
+}
+
+// Without `max_in_flight` the source parks messages up to the budget. A batch
+// that does not fit waits, and collect must see that as a blocked source rather
+// than linger for a batch that cannot arrive.
+func TestTheDefaultBudgetBlocksASourceBatchThatDoesNotFit(t *testing.T) {
+	const size = 1000
+	batches := make([][]string, 6)
+	for index := range batches {
+		batches[index] = scriptedBatch(fmt.Sprintf("b%d-", index), size)
+	}
+	source := registerScripted(t, "mqbrp_test_budget", batches)
+	handle := openScripted(t, "mqbrp_test_budget")
+
+	fits := defaultInFlightMessages / size * size
+	held := holdMessages(t, handle, fits)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !handle.sourceBlocked() {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d messages held and the next batch cannot fit, but the source is not seen as blocked", fits)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, blob, _ := handle.nextBatch(size, 50*time.Millisecond); len(blob) > 0 {
+		t.Fatal("a batch arrived although the budget was exhausted")
+	}
+	if waiting := handle.budgetWaiters.Load(); waiting == 0 {
+		t.Fatal("no source batch is waiting for budget")
+	}
+
+	commitAll(t, handle, held)
+	commitAll(t, handle, holdMessages(t, handle, len(batches)*size-fits))
+
+	for count := 0; count < len(batches); count++ {
+		select {
+		case acked := <-source.acked:
+			if acked.err != nil {
+				t.Errorf("source batch %d was rejected: %v", acked.batch, acked.err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("only %d of %d source batches were acknowledged", count, len(batches))
+		}
+	}
+}
+
+// A source batch larger than the whole budget takes all of it instead of
+// waiting forever for room it can never have.
+func TestASourceBatchLargerThanTheBudgetStillParks(t *testing.T) {
+	large := defaultInFlightMessages + 10
+	source := registerScripted(t, "mqbrp_test_oversized", [][]string{
+		scriptedBatch("big-", large), scriptedBatch("small-", 2),
+	})
+	handle := openScripted(t, "mqbrp_test_oversized")
+
+	for _, want := range []int{large, 2} {
+		sizes := holdMessages(t, handle, want)
+		if len(sizes) != 1 {
+			t.Fatalf("expected the %d messages in one mq-bridge batch, got %d", want, len(sizes))
+		}
+		commitAll(t, handle, sizes)
+		select {
+		case acked := <-source.acked:
+			if acked.err != nil {
+				t.Errorf("source batch %d was rejected: %v", acked.batch, acked.err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the batch of %d messages was never acknowledged", want)
+		}
+	}
+}
+
 // An output that keeps what it was given, so the publisher direction can be
 // asserted without a broker.
 type recordingSink struct {
