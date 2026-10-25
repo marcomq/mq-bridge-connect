@@ -126,11 +126,11 @@ and LICENSE-MIT, and ships beside the libraries in every release artifact.
 PART A — Go c-shared library (libmq_bridge_connect_go)
 ================================================================================
 
-381 third-party Go modules are linked.
+379 third-party Go modules are linked.
 
 - 179 × Apache-2.0
-- 113 × MIT
-- 55 × BSD-3-Clause
+- 112 × MIT
+- 54 × BSD-3-Clause
 - 21 × BSD-2-Clause
 - 10 × MPL-2.0
 - 2 × ISC
@@ -187,13 +187,14 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 - `github.com/PaesslerAG/jsonpath` v0.1.1 — BSD-3-Clause [L048] — Copyright (c) 2017, Paessler AG <support@paessler.com>
 - `github.com/ProtonMail/go-crypto` v1.4.1 — BSD-3-Clause [L046] — Copyright (c) 2009 The Go Authors. All rights reserved.
 - `github.com/RoaringBitmap/roaring/v2` v2.24.0 — Apache-2.0 [L006] [L002]
+- `github.com/SAP/go-hdb` v1.16.8 — Apache-2.0 [L003]
 - `github.com/andybalholm/brotli` v1.2.2 — MIT [L084] — Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
 - `github.com/apache/arrow-go/v18` v18.7.0 — Apache-2.0 [L007]
 - `github.com/apache/arrow/go/arrow` v0.0.0-20211112161151-bc219186db40 — Apache-2.0 [L008]
 - `github.com/apache/arrow/go/v12` v12.0.1 — Apache-2.0 [L009]
 - `github.com/apache/arrow/go/v15` v15.0.2 — Apache-2.0 [L010]
 - `github.com/apache/pulsar-client-go` v0.18.0 — Apache-2.0 [L003] [L011]
-- `github.com/apache/thrift` v0.24.0 — Apache-2.0 [L012]
+- `github.com/apache/thrift` v0.25.0 — Apache-2.0 [L012]
 - `github.com/apapsch/go-jsonmerge/v2` v2.0.0 — MIT [L086] — Copyright (c) 2016-2019 Artur Kraev
 - `github.com/ardielle/ardielle-go` v1.5.2 — Apache-2.0 [L013]
 - `github.com/authzed/authzed-go` v1.8.0 — Apache-2.0 [L003]
@@ -251,7 +252,6 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 - `github.com/cloudflare/circl` v1.6.3 — BSD-3-Clause [L050] — Copyright (c) 2019 Cloudflare. All rights reserved.
 - `github.com/cncf/xds/go` v0.0.0-20260202195803-dba9d589def2 — Apache-2.0 [L003]
 - `github.com/cockroachdb/apd/v3` v3.2.3 — Apache-2.0 [L015]
-- `github.com/cohere-ai/cohere-go/v2` v2.16.2 — MIT [L086] — Copyright (c) 2021 Cohere
 - `github.com/colinmarc/hdfs` v1.1.3 — MIT [L091] — Copyright (c) 2014 Colin Marc (colinmarc@gmail.com)
 - `github.com/coreos/go-oidc/v3` v3.17.0 — Apache-2.0 [L004]
 - `github.com/couchbase/gocb/v2` v2.12.1 — Apache-2.0 [L003]
@@ -409,8 +409,8 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 - `github.com/rabbitmq/amqp091-go` v1.14.0 — BSD-2-Clause [L039] — Copyright (c) 2021 VMware, Inc. or its affiliates. All Rights Reserved.
 - `github.com/rcrowley/go-metrics` v0.0.0-20250401214520-65e299d6c5c9 — BSD-2-Clause [L040] — Copyright 2012 Richard Crowley. All rights reserved.
 - `github.com/redis/go-redis/v9` v9.18.0 — BSD-2-Clause [L036] — Copyright (c) 2013 The github.com/redis/go-redis Authors.
-- `github.com/redpanda-data/benthos/v4` v4.80.0 — MIT [L084] — Copyright (c) 2025 Redpanda Data, Inc.
-- `github.com/redpanda-data/connect/v4` v4.110.0 — Apache-2.0 [L003]
+- `github.com/redpanda-data/benthos/v4` v4.84.0 — MIT [L084] — Copyright (c) 2025 Redpanda Data, Inc.
+- `github.com/redpanda-data/connect/v4` v4.115.1 — Apache-2.0 [L003]
 - `github.com/remyoudompheng/bigfft` v0.0.0-20230129092748-24d4a6f8daec — BSD-3-Clause [L046] — Copyright (c) 2012 The Go Authors. All rights reserved.
 - `github.com/rickb777/period` v1.0.32 — BSD-3-Clause [L060] — Copyright (c) 2022, Rick Beton
 - `github.com/rickb777/plural/v2` v2.1.1 — BSD-3-Clause [L061] — Copyright (c) 2016, Rick Beton
@@ -419,7 +419,6 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 - `github.com/rs/xid` v1.6.0 — MIT [L099] — Copyright (c) 2015 Olivier Poitrey <rs@dailymotion.com>
 - `github.com/rs/zerolog` v1.34.0 — MIT [L086] — Copyright (c) 2017 Olivier Poitrey
 - `github.com/russross/blackfriday/v2` v2.1.0 — BSD-2-Clause [L041] — Copyright © 2011 Russ Ross
-- `github.com/sashabaranov/go-openai` v1.41.2 — Apache-2.0 [L003]
 - `github.com/segmentio/asm` v1.2.1 — MIT [L087] — Copyright 2023 Segment
 - `github.com/segmentio/ksuid` v1.0.4 — MIT [L086] — Copyright (c) 2017 Segment.io
 - `github.com/sergi/go-diff` v1.4.0 — MIT [L100] — Copyright (c) 2012-2016 The go-diff Authors. All rights reserved.
@@ -440,7 +439,6 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 - `github.com/tmc/langchaingo` v0.1.14 — MIT [L095] — Copyright (c) Travis Cline <travis.cline@gmail.com>
 - `github.com/trinodb/trino-go-client` v0.333.0 — Apache-2.0 [L003]
 - `github.com/twmb/avro` v1.8.0 — MIT [L086] — Copyright (c) 2026 Travis Bischel
-- `github.com/twmb/franz-go/pkg/sr` v1.8.0 — BSD-3-Clause [L062] — Copyright 2020, Travis Bischel.
 - `github.com/twpayne/go-geom` v1.6.1 — BSD-2-Clause [L042] — Copyright (c) 2013, Tom Payne
 - `github.com/urfave/cli/v2` v2.27.7 — MIT [L086] — Copyright (c) 2022 urfave/cli maintainers
 - `github.com/vmihailenco/msgpack/v5` v5.4.1 — BSD-2-Clause [L036] — Copyright (c) 2013 The github.com/vmihailenco/msgpack Authors.
@@ -483,15 +481,15 @@ PART A — Go c-shared library (libmq_bridge_connect_go)
 - `go.uber.org/zap` v1.27.1 — MIT [L084] — Copyright (c) 2016-2024 Uber Technologies, Inc.
 - `go.yaml.in/yaml/v2` v2.4.4 — Apache-2.0 [L004] [L102] — Copyright (c) 2006 Kirill Simonov
 - `go.yaml.in/yaml/v3` v3.0.5 — Apache-2.0 [L026]
-- `golang.org/x/crypto` v0.56.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/crypto` v0.57.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
 - `golang.org/x/exp` v0.0.0-20260603202125-055de637280b — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
-- `golang.org/x/mod` v0.40.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
-- `golang.org/x/net` v0.58.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/mod` v0.41.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/net` v0.60.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
 - `golang.org/x/oauth2` v0.36.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
-- `golang.org/x/sync` v0.22.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
-- `golang.org/x/sys` v0.47.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
-- `golang.org/x/term` v0.45.0 (darwin only) — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
-- `golang.org/x/text` v0.41.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/sync` v0.23.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/sys` v0.48.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/term` v0.46.0 (darwin only) — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
+- `golang.org/x/text` v0.42.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
 - `golang.org/x/time` v0.15.0 — BSD-3-Clause [L063] — Copyright 2009 The Go Authors.
 - `golang.org/x/xerrors` v0.0.0-20240903120638-7835f813f4da — BSD-3-Clause [L063] — Copyright 2019 The Go Authors.
 - `google.golang.org/api` v0.292.0 — BSD-3-Clause [L046] — Copyright (c) 2011 Google Inc. All rights reserved.
@@ -7736,7 +7734,7 @@ extensions = ["go"]
 
 
 --------------------------------------------------------------------------------
-[L012] Apache-2.0 — as distributed with github.com/apache/thrift v0.24.0
+[L012] Apache-2.0 — as distributed with github.com/apache/thrift v0.25.0
 --------------------------------------------------------------------------------
 
                                  Apache License
@@ -7948,13 +7946,6 @@ The Apache Thrift software includes a number of subcomponents with
 separate copyright notices and license terms. Your use of the source
 code for the these subcomponents is subject to the terms and
 conditions of the following licenses.
-
---------------------------------------------------
-Portions of the following files are licensed under the MIT License:
-
-  lib/erl/src/Makefile.am
-
-Please see doc/otp-base-license.txt for the full terms of this license.
 
 --------------------------------------------------
 For the aclocal/ax_boost_base.m4 and contrib/fb303/aclocal/ax_boost_base.m4 components:
@@ -12742,7 +12733,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 --------------------------------------------------------------------------------
-[L063] BSD-3-Clause — as distributed with golang.org/x/crypto v0.56.0
+[L063] BSD-3-Clause — as distributed with golang.org/x/crypto v0.57.0
 --------------------------------------------------------------------------------
 
 Copyright 2009 The Go Authors.

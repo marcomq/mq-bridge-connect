@@ -9,8 +9,10 @@
 #
 # Two single upstream files carry almost all the blast radius:
 #   internal/serviceaccount/oauth2.go -> blocks a2a all aws cloud community
-#                                        kafka ockam otlp redpanda
-#   internal/license                  -> blocks a2a all aws cloud community
+#                                        kafka ockam otlp redpanda, and since
+#                                        v4.113 openai cohere (via
+#                                        internal/schemaregistry)
+#   internal/license                 -> blocks a2a all aws cloud community
 #                                        gateway google iceberg jira mssqlserver
 #                                        mysql oracledb otlp postgresql
 #                                        salesforce snowflake splunk
@@ -23,7 +25,7 @@
 #
 # An entry under internal/ is relative to github.com/redpanda-data/connect/v4
 # instead. It names an Apache-2.0 implementation package whose public wrapper
-# cannot be used: the wrapper is an RCL file (openai, ollama, cohere), has no
+# cannot be used: the wrapper is an RCL file (ollama), has no
 # licence header (timeplus), or drags tainted siblings in (aws, pure/extended).
 # The wrapper is never imported: go-bridge/unwrapped, a nested module inside
 # the upstream path, links the implementation with a file of our own.
@@ -96,13 +98,11 @@ internal/impl/aws/lambda
 internal/impl/aws/s3
 internal/impl/aws/sns
 internal/impl/aws/sqs
-internal/impl/cohere
 internal/impl/html
 internal/impl/jsonpath
 internal/impl/lang
 internal/impl/mongodb/aws
 internal/impl/ollama
-internal/impl/openai
 internal/impl/opensearch/aws
 internal/impl/parquet
 internal/impl/timeplus

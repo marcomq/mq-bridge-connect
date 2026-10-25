@@ -40,8 +40,8 @@ package closure the compiler actually compiles and reads every file in it. It
 fails on an RCL header anywhere, and on any Redpanda Connect file that does not
 carry the Apache-2.0 header — so a third licence, or no header at all, fails
 too. It runs in CI, so an upstream release that taints a package we link is
-caught at the next push rather than after shipping. At connect v4.110.0 it
-reads 21,686 linked files and passes.
+caught at the next push rather than after shipping. At connect v4.115.1 it
+reads 21,687 linked files and passes.
 
 The second rule is why `confluent` is not linked. Its Schema Registry code
 imports `internal/impl/protobuf/common`, where four compiled files carry a
@@ -57,17 +57,21 @@ not:
 
 | Connector | Why the public wrapper is not used |
 | :--- | :--- |
-| `openai`, `ollama`, `cohere` | the wrapper file itself carries the RCL header |
+| `ollama` | the wrapper file itself carries the RCL header |
 | `aws` | the wrapper also imports `dynamodb`, `kafka/aws`, `mysql/aws` and `postgresql/aws`, which reach RCL code |
 | `pure/extended` | the wrapper also imports `protobuf`, which reaches the BSL files above |
 | `timeplus` | the wrapper file carries no licence header at all |
 
 For these the wrapper is never imported. [`go-bridge/unwrapped`](../go-bridge/unwrapped/)
 is a file of our own that imports the Apache-2.0 implementation packages
-instead: `openai`, `ollama`, `cohere`, `timeplus`, `awk`, `html`, `jsonpath`,
+instead: `ollama`, `timeplus`, `awk`, `html`, `jsonpath`,
 `lang`, `parquet`, `xml`, the AWS `bedrock`, `cloudwatch`, `kinesis`, `lambda`,
 `s3`, `sns` and `sqs` packages, and the AWS credential hooks for `mongodb` and
 `opensearch`. AWS `dynamodb` stays out: five of its eight files are RCL.
+
+`openai` and `cohere` were linked this way up to connect v4.112. Since v4.113
+their chat processors import `internal/schemaregistry`, which reaches the RCL
+file `internal/serviceaccount/oauth2.go`, so both are out.
 
 Go only lets code inside the upstream module path import its `internal`
 packages, so `go-bridge/unwrapped` is a nested module named

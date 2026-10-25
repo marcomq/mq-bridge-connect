@@ -43,7 +43,7 @@ Rust side and a small private ABI in between.
 | Tool | Version |
 | :--- | :--- |
 | Rust | 1.85+ |
-| Go | 1.26.6+ (cgo enabled — needs a working C toolchain) |
+| Go | 1.27.3+ (cgo enabled — needs a working C toolchain) |
 | `mq-bridge` | `0.4.13` from crates.io (plugin ABI 1.1) |
 
 Pinned upstreams: Benthos `v4.78.0`, Redpanda Connect `v4.107.2`.

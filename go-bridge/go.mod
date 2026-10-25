@@ -1,13 +1,6 @@
 module github.com/marcomq/mq-bridge-connect/go-bridge
 
-go 1.26.6
-
-require (
-	github.com/goccy/go-json v0.10.6
-	github.com/redpanda-data/benthos/v4 v4.80.0
-	github.com/redpanda-data/connect/v4 v4.110.0
-	gopkg.in/yaml.v3 v3.0.1
-)
+go 1.27.3
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260209202127-80ab13bee0bf.1 // indirect
@@ -63,13 +56,14 @@ require (
 	github.com/PaesslerAG/jsonpath v0.1.1 // indirect
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.24.0 // indirect
+	github.com/SAP/go-hdb v1.16.8 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/apache/arrow-go/v18 v18.7.0 // indirect
 	github.com/apache/arrow/go/arrow v0.0.0-20211112161151-bc219186db40 // indirect
 	github.com/apache/arrow/go/v12 v12.0.1 // indirect
 	github.com/apache/arrow/go/v15 v15.0.2 // indirect
 	github.com/apache/pulsar-client-go v0.18.0 // indirect
-	github.com/apache/thrift v0.24.0 // indirect
+	github.com/apache/thrift v0.25.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/ardielle/ardielle-go v1.5.2 // indirect
 	github.com/authzed/authzed-go v1.8.0 // indirect
@@ -128,7 +122,6 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/cockroachdb/apd/v3 v3.2.3 // indirect
-	github.com/cohere-ai/cohere-go/v2 v2.16.2 // indirect
 	github.com/colinmarc/hdfs v1.1.3 // indirect
 	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
 	github.com/couchbase/gocb/v2 v2.12.1 // indirect
@@ -306,7 +299,6 @@ require (
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/sashabaranov/go-openai v1.41.2 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
@@ -327,7 +319,6 @@ require (
 	github.com/tmc/langchaingo v0.1.14 // indirect
 	github.com/trinodb/trino-go-client v0.333.0 // indirect
 	github.com/twmb/avro v1.8.0 // indirect
-	github.com/twmb/franz-go/pkg/sr v1.8.0 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/urfave/cli/v2 v2.27.7 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
@@ -371,15 +362,15 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.56.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
-	golang.org/x/mod v0.40.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
-	golang.org/x/term v0.45.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/term v0.46.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
@@ -409,8 +400,12 @@ require (
 )
 
 require (
+	github.com/goccy/go-json v0.10.6
+	github.com/redpanda-data/benthos/v4 v4.84.0
+	github.com/redpanda-data/connect/v4 v4.115.1
 	github.com/redpanda-data/connect/v4/mqbridge/unwrapped v0.0.0
-	golang.org/x/sync v0.22.0
+	golang.org/x/sync v0.23.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 replace github.com/redpanda-data/connect/v4/mqbridge/unwrapped => ./unwrapped
